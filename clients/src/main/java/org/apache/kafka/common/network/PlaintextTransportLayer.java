@@ -53,6 +53,9 @@ public class PlaintextTransportLayer implements TransportLayer {
         return connected;
     }
 
+    /**
+     * 底层关闭连接就是关闭key
+     */
     @Override
     public void disconnect() {
         key.cancel();

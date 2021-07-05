@@ -92,6 +92,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * 该对象负责更新元数据信息 作为client需要知道集群中存在哪些node以及它们的地址信息
+     * 会有一个定期刷新的机制
      */
     private final MetadataUpdater metadataUpdater;
 
@@ -331,6 +332,7 @@ public class NetworkClient implements KafkaClient {
         }
         this.selector = selector;
         this.clientId = clientId;
+        // 相关对象的初始化
         this.inFlightRequests = new InFlightRequests(maxInFlightRequestsPerConnection);
         this.connectionStates = new ClusterConnectionStates(
                 reconnectBackoffMs, reconnectBackoffMax,
@@ -356,17 +358,20 @@ public class NetworkClient implements KafkaClient {
      * @param node The node to check
      * @param now  The current timestamp
      * @return True if we are ready to send to the given node
+     * 准备与某个node建立连接
      */
     @Override
     public boolean ready(Node node, long now) {
         if (node.isEmpty())
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
 
+        // 如果已经与该节点建立连接了 返回true  如果此时与该节点囤积了很多请求 也会返回false
         if (isReady(node, now))
             return true;
 
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
+            // 建立连接
             initiateConnect(node, now);
 
         return false;
@@ -382,12 +387,15 @@ public class NetworkClient implements KafkaClient {
      * Any pending ClientRequests for this connection will receive disconnections.
      *
      * @param nodeId The id of the node
+     *               与某个节点断开连接
      */
     @Override
     public void disconnect(String nodeId) {
+        // 连接已经断开 不需要处理
         if (connectionStates.isDisconnected(nodeId))
             return;
 
+        // 通过底层nio对象关闭连接
         selector.close(nodeId);
         long now = time.milliseconds();
 

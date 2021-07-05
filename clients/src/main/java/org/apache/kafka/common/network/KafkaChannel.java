@@ -197,12 +197,16 @@ public class KafkaChannel implements AutoCloseable {
         }
     }
 
+    /**
+     * 关闭某个kafkaChannel
+     */
     public void disconnect() {
         disconnected = true;
         if (state == ChannelState.NOT_CONNECTED && remoteAddress != null) {
             //if we captured the remote address we can provide more information
             state = new ChannelState(ChannelState.State.NOT_CONNECTED, remoteAddress.toString());
         }
+        // 需要通过底层关闭
         transportLayer.disconnect();
     }
 
@@ -400,6 +404,11 @@ public class KafkaChannel implements AutoCloseable {
         return null;
     }
 
+    /**
+     * 从channel中读取数据 读取到的数据之后会设置到 selector的容器中
+     * @return
+     * @throws IOException
+     */
     public long read() throws IOException {
         if (receive == null) {
             receive = new NetworkReceive(maxReceiveSize, id, memoryPool);

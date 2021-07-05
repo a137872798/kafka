@@ -288,6 +288,8 @@ public class Metadata implements Closeable {
      */
     public synchronized void update(int requestVersion, MetadataResponse response, boolean isPartialUpdate, long nowMs) {
         Objects.requireNonNull(response, "Metadata response cannot be null");
+
+        // 当元数据已经被关闭时 不再更新
         if (isClosed())
             throw new IllegalStateException("Update requested after metadata close");
 
@@ -304,25 +306,34 @@ public class Metadata implements Closeable {
         // 获取上一次集群id
         String previousClusterId = cache.clusterResource().clusterId();
 
-        // 从resp中解析数据并填充到缓存中
+        // 从resp中解析数据并填充到缓存中 并且会生成最新的cluster对象
         this.cache = handleMetadataResponse(response, isPartialUpdate, nowMs);
 
         Cluster cluster = cache.cluster();
+        // 从集群中获取最新的异常topic
         maybeSetMetadataError(cluster);
 
+        // 将无法保留的topic从容器中移除
         this.lastSeenLeaderEpochs.keySet().removeIf(tp -> !retainTopic(tp.topic(), false, nowMs));
 
         String newClusterId = cache.clusterResource().clusterId();
         if (!Objects.equals(previousClusterId, newClusterId)) {
             log.info("Cluster ID: {}", newClusterId);
         }
+        // 用最新的clusterId 触发监听器
         clusterResourceListeners.onUpdate(cache.clusterResource());
 
         log.debug("Updated cluster metadata updateVersion {} to {}", this.updateVersion, this.cache);
     }
 
+    /**
+     * 检查本次结果是否包含某种异常 并设置
+     * @param cluster
+     */
     private void maybeSetMetadataError(Cluster cluster) {
+        // 清理之前的异常信息
         clearRecoverableErrors();
+        // 从cluster中读取最新的异常topic
         checkInvalidTopics(cluster);
         checkUnauthorizedTopics(cluster);
     }
@@ -355,26 +366,30 @@ public class Metadata implements Closeable {
         Set<String> unauthorizedTopics = new HashSet<>();
         Set<String> invalidTopics = new HashSet<>();
 
+        // 有效的分区信息会被存储到该容器内
         List<MetadataResponse.PartitionMetadata> partitions = new ArrayList<>();
         // 遍历所有topic信息
         for (MetadataResponse.TopicMetadata metadata : metadataResponse.topicMetadata()) {
             topics.add(metadata.topic());
 
-            // 如果不需要保留该topic 就跳过
+            // TODO 如果不需要保留该topic 就跳过  默认为true
             if (!retainTopic(metadata.topic(), metadata.isInternal(), nowMs))
                 continue;
 
-            // 内部topic会
+            // 内部topic会添加到特殊的list中
             if (metadata.isInternal())
                 internalTopics.add(metadata.topic());
 
+            // 有关该topic的元数据没有出现异常 获取分区信息 并更新元数据
             if (metadata.error() == Errors.NONE) {
                 for (MetadataResponse.PartitionMetadata partitionMetadata : metadata.partitionMetadata()) {
                     // Even if the partition's metadata includes an error, we need to handle
                     // the update to catch new epochs
+                    // 确保数据有效 并加入到partitions中
                     updateLatestMetadata(partitionMetadata, metadataResponse.hasReliableLeaderEpochs())
                         .ifPresent(partitions::add);
 
+                    // 当某个分区的数据有异常时 设置需要获取全量数据
                     if (partitionMetadata.error.exception() instanceof InvalidMetadataException) {
                         log.debug("Requesting metadata update for partition {} due to error {}",
                                 partitionMetadata.topicPartition, partitionMetadata.error);
@@ -382,11 +397,13 @@ public class Metadata implements Closeable {
                     }
                 }
             } else {
+                // 如果topic数据有异常 标记获取全量数据
                 if (metadata.error().exception() instanceof InvalidMetadataException) {
                     log.debug("Requesting metadata update for topic {} due to error {}", metadata.topic(), metadata.error());
                     requestUpdate();
                 }
 
+                // 根据异常类型加入到不同容器中
                 if (metadata.error() == Errors.INVALID_TOPIC_EXCEPTION)
                     invalidTopics.add(metadata.topic());
                 else if (metadata.error() == Errors.TOPIC_AUTHORIZATION_FAILED)
@@ -394,12 +411,16 @@ public class Metadata implements Closeable {
             }
         }
 
+        // 以上已经处理完所有 topic/partition信息 下面开始处理broker的信息
+
         Map<Integer, Node> nodes = metadataResponse.brokersById();
         if (isPartialUpdate)
+            // 部分更新 则将数据进行合并
             return this.cache.mergeWith(metadataResponse.clusterId(), nodes, partitions,
                 unauthorizedTopics, invalidTopics, internalTopics, metadataResponse.controller(),
                 (topic, isInternal) -> !topics.contains(topic) && retainTopic(topic, isInternal, nowMs));
         else
+            // 如果是全量更新 基于以上信息生成新的cache对象
             return new MetadataCache(metadataResponse.clusterId(), nodes, partitions,
                 unauthorizedTopics, invalidTopics, internalTopics, metadataResponse.controller());
     }
@@ -407,26 +428,33 @@ public class Metadata implements Closeable {
     /**
      * Compute the latest partition metadata to cache given ordering by leader epochs (if both
      * available and reliable).
+     * 获取最新的分区信息
+     * @param hasReliableLeaderEpoch 返回的metadataResponse对象中是否有leader的epoch信息
      */
     private Optional<MetadataResponse.PartitionMetadata> updateLatestMetadata(
             MetadataResponse.PartitionMetadata partitionMetadata,
             boolean hasReliableLeaderEpoch) {
+        // 先找到对应的topic对象
         TopicPartition tp = partitionMetadata.topicPartition;
+        // 当返回的信息中有epoch信息 与最后一次观测到的做比较
         if (hasReliableLeaderEpoch && partitionMetadata.leaderEpoch.isPresent()) {
             int newEpoch = partitionMetadata.leaderEpoch.get();
             // If the received leader epoch is at least the same as the previous one, update the metadata
             Integer currentEpoch = lastSeenLeaderEpochs.get(tp);
+            // 本次元数据有效 更新元数据
             if (currentEpoch == null || newEpoch >= currentEpoch) {
                 log.debug("Updating last seen epoch for partition {} from {} to epoch {} from new metadata", tp, currentEpoch, newEpoch);
                 lastSeenLeaderEpochs.put(tp, newEpoch);
                 return Optional.of(partitionMetadata);
             } else {
                 // Otherwise ignore the new metadata and use the previously cached info
+                // 代表之前的数据更新 从缓存中获取对应信息
                 log.debug("Got metadata for an older epoch {} (current is {}) for partition {}, not updating", newEpoch, currentEpoch, tp);
                 return cache.partitionMetadata(tp);
             }
         } else {
             // Handle old cluster formats as well as error responses where leader and epoch are missing
+            // 如果本次没有携带epoch信息 将之前的也移除掉
             lastSeenLeaderEpochs.remove(tp);
             return Optional.of(partitionMetadata.withoutLeaderEpoch());
         }
@@ -529,6 +557,7 @@ public class Metadata implements Closeable {
 
     /**
      * Close this metadata instance to indicate that metadata updates are no longer possible.
+     * 标记元数据已经被关闭
      */
     @Override
     public synchronized void close() {

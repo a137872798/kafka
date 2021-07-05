@@ -104,9 +104,16 @@ public class Selector implements Selectable, AutoCloseable {
     private final Logger log;
     private final java.nio.channels.Selector nioSelector;
     private final Map<String, KafkaChannel> channels;
+    /**
+     * 存储所有被显示沉默的channel
+     */
     private final Set<KafkaChannel> explicitlyMutedChannels;
     private boolean outOfMemory;
     private final List<NetworkSend> completedSends;
+
+    /**
+     * 所有最近读取到的数据都存储在该容器中 通过id来匹配
+     */
     private final LinkedHashMap<String, NetworkReceive> completedReceives;
 
     /**
@@ -707,9 +714,15 @@ public class Selector implements Selectable, AutoCloseable {
         }
     }
 
+    /**
+     * 尝试从channel中继续读取数据
+     * @param channel
+     * @throws IOException
+     */
     private void attemptRead(KafkaChannel channel) throws IOException {
         String nodeId = channel.id();
 
+        // 从channel中继续读取数据
         long bytesReceived = channel.read();
         if (bytesReceived != 0) {
             long currentTimeMs = time.milliseconds();
@@ -728,14 +741,22 @@ public class Selector implements Selectable, AutoCloseable {
         }
     }
 
+    /**
+     * 判断是否还能从该channel中读取到数据
+     * @param channel
+     * @return
+     */
     private boolean maybeReadFromClosingChannel(KafkaChannel channel) {
         boolean hasPending;
+        // 如果状态不正确 不然不会读取到数据
         if (channel.state().state() != ChannelState.State.READY)
             hasPending = false;
+        // 如果是被沉默的channel (理解为延迟处理读取到的数据)   或者收到了新数据  就代表存在未处理的数据
         else if (explicitlyMutedChannels.contains(channel) || hasCompletedReceive(channel))
             hasPending = true;
         else {
             try {
+                // 尝试继续读取数据
                 attemptRead(channel);
                 hasPending = hasCompletedReceive(channel);
             } catch (Exception e) {
@@ -910,6 +931,7 @@ public class Selector implements Selectable, AutoCloseable {
 
     /**
      * Close the connection identified by the given id
+     * 关闭与某个node的连接
      */
     public void close(String id) {
         KafkaChannel channel = this.channels.get(id);
@@ -919,6 +941,7 @@ public class Selector implements Selectable, AutoCloseable {
             channel.state(ChannelState.LOCAL_CLOSE);
             close(channel, CloseMode.DISCARD_NO_NOTIFY);
         } else {
+            // closingChannels 存储的是优雅关闭的连接
             KafkaChannel closingChannel = this.closingChannels.remove(id);
             // Close any closing channel, leave the channel in the state in which closing was triggered
             if (closingChannel != null)
@@ -953,12 +976,15 @@ public class Selector implements Selectable, AutoCloseable {
      *
      * The channel will be added to disconnect list when it is actually closed if `closeMode.notifyDisconnect`
      * is true.
+     * 关闭某个连接
      */
     private void close(KafkaChannel channel, CloseMode closeMode) {
+        // 关闭key 也就代表不再监听新的事件了
         channel.disconnect();
 
         // Ensure that `connected` does not have closed channels. This could happen if `prepare` throws an exception
         // in the `poll` invocation when `finishConnect` succeeds
+        // 从管理已连接的容器中移除该连接
         connected.remove(channel.id());
 
         // Keep track of closed channels with pending receives so that all received records
@@ -967,6 +993,7 @@ public class Selector implements Selectable, AutoCloseable {
         // handle close(). When the remote end closes its connection, the channel is retained until
         // a send fails or all outstanding receives are processed. Mute state of disconnected channels
         // are tracked to ensure that requests are processed one-by-one by the broker to preserve ordering.
+        // 如果本次是优雅关闭 或者还能从channel中读取到数据 会先处理完这部分数据
         if (closeMode == CloseMode.GRACEFUL && maybeReadFromClosingChannel(channel)) {
             closingChannels.put(channel.id(), channel);
             log.debug("Tracking closing connection {} to process outstanding requests", channel.id());

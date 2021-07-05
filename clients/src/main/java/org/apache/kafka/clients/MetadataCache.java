@@ -53,6 +53,16 @@ public class MetadataCache {
 
     private Cluster clusterInstance;
 
+    /**
+     * 在某次获取到最新的元数据信息后就会转换成该对象
+     * @param clusterId
+     * @param nodes
+     * @param partitions
+     * @param unauthorizedTopics
+     * @param invalidTopics
+     * @param internalTopics
+     * @param controller
+     */
     MetadataCache(String clusterId,
                   Map<Integer, Node> nodes,
                   Collection<PartitionMetadata> partitions,
@@ -79,6 +89,7 @@ public class MetadataCache {
         this.controller = controller;
 
         this.metadataByPartition = new HashMap<>(partitions.size());
+        // 将分区信息按照 topic/partition进行分组
         for (PartitionMetadata p : partitions) {
             this.metadataByPartition.put(p.topicPartition, p);
         }
@@ -90,6 +101,11 @@ public class MetadataCache {
         }
     }
 
+    /**
+     * 从缓存中获取某个分区元数据
+     * @param topicPartition
+     * @return
+     */
     Optional<PartitionMetadata> partitionMetadata(TopicPartition topicPartition) {
         return Optional.ofNullable(metadataByPartition.get(topicPartition));
     }
@@ -127,6 +143,7 @@ public class MetadataCache {
      * @param newController the new controller node
      * @param retainTopic returns whether a topic's metadata should be retained
      * @return the merged metadata cache
+     * 将之前的元数据 与本次传入的数据进行合并
      */
     MetadataCache mergeWith(String newClusterId,
                             Map<Integer, Node> newNodes,
@@ -176,7 +193,11 @@ public class MetadataCache {
         return result;
     }
 
+    /**
+     * 创建cluster对象
+     */
     private void computeClusterView() {
+        // 将分区元数据转换成info对象
         List<PartitionInfo> partitionInfos = metadataByPartition.values()
                 .stream()
                 .map(metadata -> MetadataResponse.toPartitionInfo(metadata, nodes))
