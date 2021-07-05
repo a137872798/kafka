@@ -106,6 +106,14 @@ public final class ClientUtils {
                 clientSaslMechanism, time, true, logContext);
     }
 
+    /**
+     * 将host解析成一组地址
+     * @param host
+     * @param clientDnsLookup
+     * @param hostResolver
+     * @return
+     * @throws UnknownHostException
+     */
     static List<InetAddress> resolve(String host, ClientDnsLookup clientDnsLookup,
                                      HostResolver hostResolver) throws UnknownHostException {
         InetAddress[] addresses = hostResolver.resolve(host);

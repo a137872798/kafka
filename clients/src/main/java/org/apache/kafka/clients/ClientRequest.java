@@ -23,26 +23,39 @@ import org.apache.kafka.common.requests.RequestHeader;
 
 /**
  * A request being sent to the server. This holds both the network send as well as the client-level metadata.
+ * kafka发送数据时 对应的请求对象
  */
 public final class ClientRequest {
 
+    /**
+     * 表明本次要发送的目的地
+     */
     private final String destination;
+    /**
+     * 内部存储了有效数据
+     */
     private final AbstractRequest.Builder<?> requestBuilder;
+
+    // 其他都是辅助信息
     private final int correlationId;
     private final String clientId;
     private final long createdTimeMs;
     private final boolean expectResponse;
     private final int requestTimeoutMs;
+
+    /**
+     * 处理响应结果的回调对象
+     */
     private final RequestCompletionHandler callback;
 
     /**
-     * @param destination The brokerId to send the request to
-     * @param requestBuilder The builder for the request to make
-     * @param correlationId The correlation id for this client request
+     * @param destination The brokerId to send the request to     nodeId
+     * @param requestBuilder The builder for the request to make   该对象内存储了req的数据体
+     * @param correlationId The correlation id for this client request   可以理解为reqId
      * @param clientId The client ID to use for the header
-     * @param createdTimeMs The unix timestamp in milliseconds for the time at which this request was created.
+     * @param createdTimeMs The unix timestamp in milliseconds for the time at which this request was created.   是否期望返回结果
      * @param expectResponse Should we expect a response message or is this request complete once it is sent?
-     * @param callback A callback to execute when the response has been received (or null if no callback is necessary)
+     * @param callback A callback to execute when the response has been received (or null if no callback is necessary)  处理结果的回调对象 可以为null
      */
     public ClientRequest(String destination,
                          AbstractRequest.Builder<?> requestBuilder,

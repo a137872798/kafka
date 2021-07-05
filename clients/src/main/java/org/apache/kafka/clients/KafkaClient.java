@@ -24,7 +24,8 @@ import java.io.Closeable;
 import java.util.List;
 
 /**
- * The interface for {@link NetworkClient}
+ * The interface for {@link NetworkClient
+ * kafka客户端抽象层
  */
 public interface KafkaClient extends Closeable {
 
@@ -34,6 +35,7 @@ public interface KafkaClient extends Closeable {
      *
      * @param node The node to check
      * @param now The current timestamp
+     *            判断与某个节点的连接是否建立
      */
     boolean isReady(Node node, long now);
 
@@ -44,6 +46,7 @@ public interface KafkaClient extends Closeable {
      * @param node The node to connect to.
      * @param now The current time
      * @return true iff we are ready to immediately initiate the sending of another request to the given node.
+     * 开始与指定的节点建立连接
      */
     boolean ready(Node node, long now);
 
@@ -55,6 +58,7 @@ public interface KafkaClient extends Closeable {
      * @param node The node to check
      * @param now The current timestamp
      * @return The number of milliseconds to wait.
+     * 基于与该节点当前的连接状态返回一个延迟时间 比如发现此时连接断开 返回的就是重连时间间隔
      */
     long connectionDelay(Node node, long now);
 
@@ -75,6 +79,7 @@ public interface KafkaClient extends Closeable {
      *
      * @param node the node to check
      * @return true iff the connection has failed and the node is disconnected
+     * 判断与某个节点的连接是否失败了
      */
     boolean connectionFailed(Node node);
 
@@ -84,6 +89,7 @@ public interface KafkaClient extends Closeable {
      *
      * @param node the node to check
      * @return an AuthenticationException iff authentication has failed, null otherwise
+     * 当与该节点连接失败时检测是否是认证异常
      */
     AuthenticationException authenticationException(Node node);
 
@@ -91,6 +97,7 @@ public interface KafkaClient extends Closeable {
      * Queue up the given request for sending. Requests can only be sent on ready connections.
      * @param request The request
      * @param now The current timestamp
+     *            将某个请求对象发送到目标节点 clientRequest中携带了目的地信息
      */
     void send(ClientRequest request, long now);
 
@@ -102,6 +109,7 @@ public interface KafkaClient extends Closeable {
      *                metadata update timeout)
      * @param now The current time in ms
      * @throws IllegalStateException If a request is sent to an unready node
+     * 从某个节点拉取数据 等待一定时间并返回一组响应对象
      */
     List<ClientResponse> poll(long timeout, long now);
 
@@ -110,6 +118,7 @@ public interface KafkaClient extends Closeable {
      * Any pending ClientRequests for this connection will receive disconnections.
      *
      * @param nodeId The id of the node
+     *               与某个节点断开连接
      */
     void disconnect(String nodeId);
 
@@ -119,6 +128,7 @@ public interface KafkaClient extends Closeable {
      * for the cleared requests, nor will they be returned from poll().
      *
      * @param nodeId The id of the node
+     *               关闭某个节点
      */
     void close(String nodeId);
 
@@ -129,16 +139,19 @@ public interface KafkaClient extends Closeable {
      *
      * @param now The current time in ms
      * @return The node with the fewest in-flight requests.
+     * 选择一个负载最低的节点
      */
     Node leastLoadedNode(long now);
 
     /**
      * The number of currently in-flight requests for which we have not yet returned a response
+     * 有多少请求还没有收到结果
      */
     int inFlightRequestCount();
 
     /**
      * Return true if there is at least one in-flight request and false otherwise.
+     * 是否有请求还未收到结果
      */
     boolean hasInFlightRequests();
 
@@ -146,6 +159,7 @@ public interface KafkaClient extends Closeable {
      * Get the total in-flight requests for a particular node
      *
      * @param nodeId The id of the node
+     *               针对某个节点判断是否有未收到响应的请求
      */
     int inFlightRequestCount(String nodeId);
 
@@ -159,11 +173,13 @@ public interface KafkaClient extends Closeable {
      * otherwise.
      *
      * @param now the current time
+     *            判断是否至少有一个已经建立连接的节点
      */
     boolean hasReadyNodes(long now);
 
     /**
      * Wake up the client if it is currently blocked waiting for I/O
+     * 唤醒时间循转
      */
     void wakeup();
 
@@ -174,6 +190,7 @@ public interface KafkaClient extends Closeable {
      * @param requestBuilder the request builder to use
      * @param createdTimeMs the time in milliseconds to use as the creation time of the request
      * @param expectResponse true iff we expect a response
+     *                       构建一个请求对象
      */
     ClientRequest newClientRequest(String nodeId, AbstractRequest.Builder<?> requestBuilder,
                                    long createdTimeMs, boolean expectResponse);
@@ -204,12 +221,14 @@ public interface KafkaClient extends Closeable {
      * client is being polled. No further requests may be sent using the client. The current poll()
      * will be terminated using wakeup(). The client should be explicitly shutdown using {@link #close()}
      * after poll returns. Note that {@link #close()} should not be invoked concurrently while polling.
+     * 关闭当前客户端
      */
     void initiateClose();
 
     /**
      * Returns true if the client is still active. Returns false if {@link #initiateClose()} or {@link #close()}
      * was invoked for this client.
+     * 判断client是否处于激活状态
      */
     boolean active();
 

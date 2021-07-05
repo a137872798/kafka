@@ -253,6 +253,9 @@ public class MetadataResponse extends AbstractResponse {
             hasReliableLeaderEpochs(version));
     }
 
+    /**
+     * 返回的元数据中 有关topic/partition信息的元数据
+     */
     public static class TopicMetadata {
         private final Errors error;
         private final String topic;

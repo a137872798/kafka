@@ -24,6 +24,7 @@ import java.util.function.Supplier;
  * An interface abstracting the clock to use in unit testing classes that make use of clock time.
  *
  * Implementations of this class should be thread-safe.
+ * 获取时间的接口 拓展了一些跟时间相关的条件函数
  */
 public interface Time {
 

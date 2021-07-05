@@ -56,23 +56,51 @@ import static org.apache.kafka.common.record.RecordBatch.NO_PARTITION_LEADER_EPO
  * If topic expiry is enabled for the metadata, any topic that has not been used within the expiry interval
  * is removed from the metadata refresh set after an update. Consumers disable topic expiry since they explicitly
  * manage topics while producers rely on topic expiry to limit the refresh set.
+ * 描述集群状态的元数据
+ * 元数据按照一定的时间间隔更新
  */
 public class Metadata implements Closeable {
     private final Logger log;
+
+    /**
+     * 如果上次失败 会有一个补偿时间，用于等待server机能恢复
+     */
     private final long refreshBackoffMs;
+    /**
+     * 元数据定期更新的时间间隔
+     */
     private final long metadataExpireMs;
+    /**
+     * 每当成功收到一次结果时 更新版本号
+     */
     private int updateVersion;  // bumped on every metadata response
     private int requestVersion; // bumped on every new topic addition
+    /**
+     * 最近一次刷新元数据的时间 可能成功也可能失败
+     */
     private long lastRefreshMs;
+    /**
+     * 最近一次成功的时间
+     */
     private long lastSuccessfulRefreshMs;
     private KafkaException fatalException;
     private Set<String> invalidTopics;
     private Set<String> unauthorizedTopics;
+    /**
+     * 缓存对象
+     */
     private MetadataCache cache = MetadataCache.empty();
+    // 描述元数据是否需要全量更新或者增量更新
     private boolean needFullUpdate;
     private boolean needPartialUpdate;
+    /**
+     * 监听集群资源变化
+     */
     private final ClusterResourceListeners clusterResourceListeners;
     private boolean isClosed;
+    /**
+     * 最近一次获取到的topic以及分区信息  epoch相当于是版本号 每当topic的分区信息发生变化就会增加epoch
+     */
     private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;
 
     /**
@@ -106,6 +134,7 @@ public class Metadata implements Closeable {
 
     /**
      * Get the current cluster info without blocking
+     * 从缓存中获取集群信息
      */
     public synchronized Cluster fetch() {
         return cache.cluster();
@@ -116,6 +145,7 @@ public class Metadata implements Closeable {
      *
      * @param nowMs current time in ms
      * @return remaining time in ms till the cluster info can be updated again
+     * 当请求失败时会有一个等待时间 这里是计算至少需要等待多久才适合发送请求
      */
     public synchronized long timeToAllowUpdate(long nowMs) {
         return Math.max(this.lastRefreshMs + this.refreshBackoffMs - nowMs, 0);
@@ -128,8 +158,10 @@ public class Metadata implements Closeable {
      *
      * @param nowMs current time in ms
      * @return remaining time in ms till updating the cluster info
+     * 返回下一次更新元数据的时间戳
      */
     public synchronized long timeToNextUpdate(long nowMs) {
+        // 如果已经要求了强制更新 时间为0  或者返回距离下次更新还有多久
         long timeToExpire = updateRequested() ? 0 : Math.max(this.lastSuccessfulRefreshMs + this.metadataExpireMs - nowMs, 0);
         return Math.max(timeToExpire, timeToAllowUpdate(nowMs));
     }
@@ -194,6 +226,7 @@ public class Metadata implements Closeable {
 
     /**
      * Check whether an update has been explicitly requested.
+     * 设置了强制更新元数据的标记  无论是增量更新还是全量更新
      *
      * @return true if an update was requested, false otherwise
      */
@@ -251,22 +284,27 @@ public class Metadata implements Closeable {
      * @param response metadata response received from the broker
      * @param isPartialUpdate whether the metadata request was for a subset of the active topics
      * @param nowMs current time in milliseconds
+     *              根据收到的响应结果 更新元数据信息
      */
     public synchronized void update(int requestVersion, MetadataResponse response, boolean isPartialUpdate, long nowMs) {
         Objects.requireNonNull(response, "Metadata response cannot be null");
         if (isClosed())
             throw new IllegalStateException("Update requested after metadata close");
 
+        // 如果本次结果已经落后了 标记需要更新部分元数据
         this.needPartialUpdate = requestVersion < this.requestVersion;
         this.lastRefreshMs = nowMs;
         this.updateVersion += 1;
+        // 代表之前的请求是一次全量数据请求 所以现在可以将标识设置成false 代表下次只要获取增量数据就可
         if (!isPartialUpdate) {
             this.needFullUpdate = false;
             this.lastSuccessfulRefreshMs = nowMs;
         }
 
+        // 获取上一次集群id
         String previousClusterId = cache.clusterResource().clusterId();
 
+        // 从resp中解析数据并填充到缓存中
         this.cache = handleMetadataResponse(response, isPartialUpdate, nowMs);
 
         Cluster cluster = cache.cluster();
@@ -305,6 +343,8 @@ public class Metadata implements Closeable {
 
     /**
      * Transform a MetadataResponse into a new MetadataCache instance.
+     * 将resp内的数据填充到cache中
+     * @param isPartialUpdate 本次是否是增量数据
      */
     private MetadataCache handleMetadataResponse(MetadataResponse metadataResponse, boolean isPartialUpdate, long nowMs) {
         // All encountered topics.
@@ -316,12 +356,15 @@ public class Metadata implements Closeable {
         Set<String> invalidTopics = new HashSet<>();
 
         List<MetadataResponse.PartitionMetadata> partitions = new ArrayList<>();
+        // 遍历所有topic信息
         for (MetadataResponse.TopicMetadata metadata : metadataResponse.topicMetadata()) {
             topics.add(metadata.topic());
 
+            // 如果不需要保留该topic 就跳过
             if (!retainTopic(metadata.topic(), metadata.isInternal(), nowMs))
                 continue;
 
+            // 内部topic会
             if (metadata.isInternal())
                 internalTopics.add(metadata.topic());
 
@@ -501,20 +544,29 @@ public class Metadata implements Closeable {
         return this.isClosed;
     }
 
+    /**
+     * 代表即将发出一个更新元数据的请求 需要更新版本信息
+     * @param nowMs
+     * @return
+     */
     public synchronized MetadataRequestAndVersion newMetadataRequestAndVersion(long nowMs) {
         MetadataRequest.Builder request = null;
         boolean isPartialUpdate = false;
 
         // Perform a partial update only if a full update hasn't been requested, and the last successful
         // hasn't exceeded the metadata refresh time.
+        // 当没有要求获取全量数据时 并且认为元数据还没有过期时 可能就是因为增加了新的topic 因此触发的强制刷新
         if (!this.needFullUpdate && this.lastSuccessfulRefreshMs + this.metadataExpireMs > nowMs) {
+            // 请求体中会包含最新的topic信息
             request = newMetadataRequestBuilderForNewTopics();
             isPartialUpdate = true;
         }
+        // 剩下的情况 都会将所有的topic发送出去
         if (request == null) {
             request = newMetadataRequestBuilder();
             isPartialUpdate = false;
         }
+        // 构建请求体以及版本号信息对象
         return new MetadataRequestAndVersion(request, requestVersion, isPartialUpdate);
     }
 
@@ -532,6 +584,7 @@ public class Metadata implements Closeable {
      * otherwise null if the functionality is not supported.
      *
      * @return the constructed metadata builder, or null if not supported
+     * 发送一个获取新增topic的请求
      */
     protected MetadataRequest.Builder newMetadataRequestBuilderForNewTopics() {
         return null;
@@ -541,9 +594,22 @@ public class Metadata implements Closeable {
         return true;
     }
 
+    /**
+     * 描述某次发送的获取元数据的请求
+     */
     public static class MetadataRequestAndVersion {
+
+        /**
+         * 包含请求体
+         */
         public final MetadataRequest.Builder requestBuilder;
+        /**
+         * 每次请求都会有一个唯一的版本号
+         */
         public final int requestVersion;
+        /**
+         * 全量更新 or 增量更新
+         */
         public final boolean isPartialUpdate;
 
         private MetadataRequestAndVersion(MetadataRequest.Builder requestBuilder,

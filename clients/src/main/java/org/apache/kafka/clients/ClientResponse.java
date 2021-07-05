@@ -24,6 +24,7 @@ import org.apache.kafka.common.requests.RequestHeader;
 /**
  * A response from the server. Contains both the body of the response as well as the correlated request
  * metadata that was originally sent.
+ * 响应对象的外层包装
  */
 public class ClientResponse {
 
@@ -35,6 +36,10 @@ public class ClientResponse {
     private final boolean disconnected;
     private final UnsupportedVersionException versionMismatch;
     private final AuthenticationException authenticationException;
+
+    /**
+     * 有效数据
+     */
     private final AbstractResponse responseBody;
 
     /**

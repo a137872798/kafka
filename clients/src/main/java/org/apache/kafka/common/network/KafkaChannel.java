@@ -376,10 +376,16 @@ public class KafkaChannel implements AutoCloseable {
         return socket.getInetAddress().toString();
     }
 
+    /**
+     * io线程只会发送合并后的数据  一个是减少网络带宽的浪费一个是批量发送性能更高
+     * @param send
+     */
     public void setSend(NetworkSend send) {
+        // 有业务线程控制数据包的合并以及发送的时机
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
         this.send = send;
+        // 注册写事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 

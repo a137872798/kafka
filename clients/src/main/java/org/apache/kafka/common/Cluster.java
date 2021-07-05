@@ -31,6 +31,7 @@ import java.util.Set;
 
 /**
  * An immutable representation of a subset of the nodes, topics, and partitions in the Kafka cluster.
+ * 存储集群相关的所有信息
  */
 public final class Cluster {
 
@@ -225,6 +226,7 @@ public final class Cluster {
     }
 
     /**
+     * 返回当前集群下所有的node
      * @return The known set of nodes
      */
     public List<Node> nodes() {

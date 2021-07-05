@@ -34,6 +34,10 @@ import java.util.stream.Collectors;
 public class MetadataRequest extends AbstractRequest {
 
     public static class Builder extends AbstractRequest.Builder<MetadataRequest> {
+
+        /**
+         * 默认情况下创建的metadataReq对象会使用该对象作为data
+         */
         private static final MetadataRequestData ALL_TOPICS_REQUEST_DATA = new MetadataRequestData().
             setTopics(null).setAllowAutoTopicCreation(true);
 

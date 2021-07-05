@@ -97,6 +97,11 @@ public abstract class AbstractRequest implements AbstractRequestResponse {
         return apiKey;
     }
 
+    /**
+     * 将header和data包装成send对象
+     * @param header
+     * @return
+     */
     public final Send toSend(RequestHeader header) {
         return SendBuilder.buildRequestSend(header, data());
     }

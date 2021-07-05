@@ -32,16 +32,19 @@ import java.util.Optional;
  * from such metadata. This is an internal class.
  * <p>
  * This class is not thread-safe!
+ * 该对象负责更新元数据，就是指集群中其他节点的信息
  */
 public interface MetadataUpdater extends Closeable {
 
     /**
      * Gets the current cluster info without blocking.
+     * 拉取集群中最新的节点信息
      */
     List<Node> fetchNodes();
 
     /**
      * Returns true if an update to the cluster metadata info is due.
+     * 是否即将更新元数据
      */
     boolean isUpdateDue(long now);
 
@@ -66,6 +69,7 @@ public interface MetadataUpdater extends Closeable {
      * @param now Current time in milliseconds
      * @param nodeId The id of the node that disconnected
      * @param maybeAuthException Optional authentication error
+     *                           处理与某个服务器断开连接
      */
     void handleServerDisconnect(long now, String nodeId, Optional<AuthenticationException> maybeAuthException);
 
@@ -74,6 +78,7 @@ public interface MetadataUpdater extends Closeable {
      *
      * @param now Current time in milliseconds
      * @param maybeFatalException Optional fatal error (e.g. {@link UnsupportedVersionException})
+     *                            处理当某个更新元数据的请求发送失败的异常
      */
     void handleFailedRequest(long now, Optional<KafkaException> maybeFatalException);
 
@@ -82,6 +87,7 @@ public interface MetadataUpdater extends Closeable {
      *
      * This provides a mechanism for the `MetadataUpdater` implementation to use the NetworkClient instance for its own
      * requests with special handling for completed receives of such requests.
+     * 处理收到的元数据信息
      */
     void handleSuccessfulResponse(RequestHeader requestHeader, long now, MetadataResponse metadataResponse);
 

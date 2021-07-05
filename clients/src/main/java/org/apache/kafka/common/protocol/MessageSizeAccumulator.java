@@ -18,6 +18,7 @@ package org.apache.kafka.common.protocol;
 
 /**
  * Helper class which facilitates zero-copy network transmission. See {@link SendBuilder}.
+ * 该对象用于计算消息总长度
  */
 public class MessageSizeAccumulator {
     private int totalSize = 0;

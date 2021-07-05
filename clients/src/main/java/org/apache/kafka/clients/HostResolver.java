@@ -20,6 +20,9 @@ package org.apache.kafka.clients;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
+/**
+ * 解析地址信息
+ */
 public interface HostResolver {
 
     InetAddress[] resolve(String host) throws UnknownHostException;

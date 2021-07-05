@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 /**
  * An internal mutable cache of nodes, topics, and partitions in the Kafka cluster. This keeps an up-to-date Cluster
  * instance which is optimized for read access.
+ * 元数据缓存对象
  */
 public class MetadataCache {
     private final String clusterId;
@@ -97,6 +98,10 @@ public class MetadataCache {
         return Optional.ofNullable(nodes.get(id));
     }
 
+    /**
+     * 从缓存中返回集群信息
+     * @return
+     */
     Cluster cluster() {
         if (clusterInstance == null) {
             throw new IllegalStateException("Cached Cluster instance should not be null, but was.");

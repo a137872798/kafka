@@ -45,6 +45,9 @@ public class SendBuilder implements Writable {
     private final ByteBuffer buffer;
 
     private final Queue<Send> sends = new ArrayDeque<>(1);
+    /**
+     * sends内数据的总大小
+     */
     private long sizeOfSends = 0;
 
     private final List<ByteBuffer> buffers = new ArrayList<>();
@@ -112,16 +115,27 @@ public class SendBuilder implements Writable {
         ByteUtils.writeVarlong(i, buffer);
     }
 
+    /**
+     * 将某个buf对象添加到 buffers中
+     * @param buffer
+     */
     private void addBuffer(ByteBuffer buffer) {
         buffers.add(buffer);
         sizeOfBuffers += buffer.remaining();
     }
 
+    /**
+     * 添加一个新的send对象
+     * @param send
+     */
     private void addSend(Send send) {
         sends.add(send);
         sizeOfSends += send.size();
     }
 
+    /**
+     * 清空buffer中的数据
+     */
     private void clearBuffers() {
         buffers.clear();
         sizeOfBuffers = 0;
@@ -147,35 +161,56 @@ public class SendBuilder implements Writable {
         }
     }
 
+    /**
+     * 一开始message的数据是写入到缓冲区中的  这里将数据移动到其他地方
+     */
     private void flushPendingSend() {
+        // 将buffer的分片添加到buffers中
         flushPendingBuffer();
+        // 此时还有囤积的数据将它们添加到send中
         if (!buffers.isEmpty()) {
             ByteBuffer[] byteBufferArray = buffers.toArray(new ByteBuffer[0]);
+            // 将本批数据包装成一个 ByteBufferSend  sizeOfBuffers代表buffers中的字节数
             addSend(new ByteBufferSend(byteBufferArray, sizeOfBuffers));
+            // 清理所有buffer数据
             clearBuffers();
         }
     }
 
+    /**
+     * 为当前缓冲区中的数据生成分片 并存入到buffers中
+     */
     private void flushPendingBuffer() {
         int latestPosition = buffer.position();
+        // 回到之前mark的位置 首次调用默认是0
         buffer.reset();
 
+        // 代表距离上次有新的数据写入
         if (latestPosition > buffer.position()) {
             buffer.limit(latestPosition);
+            // 针对pos->limit部分的数据生成分片 并加入到buffers中
             addBuffer(buffer.slice());
 
+            // mark当前位置 之后的数据写入会以该位置作为起点
             buffer.position(latestPosition);
             buffer.limit(buffer.capacity());
             buffer.mark();
         }
     }
 
+    /**
+     * 当header/data的数据都写入到send.builder后 通过该方法生成send对象
+     * @return
+     */
     public Send build() {
+        // 将buffer的数据封装成sends对象 这里使用的是分片 所以不会消耗额外的内存
         flushPendingSend();
 
         if (sends.size() == 1) {
+            // 返回单个send对象
             return sends.poll();
         } else {
+            // 如果此时有多个send对象 将他们包装成一个multi对象
             return new MultiRecordsSend(sends, sizeOfSends);
         }
     }
@@ -205,6 +240,14 @@ public class SendBuilder implements Writable {
         );
     }
 
+    /**
+     * 基于message和data构建send对象
+     * @param header
+     * @param headerVersion
+     * @param apiMessage
+     * @param apiVersion
+     * @return
+     */
     private static Send buildSend(
         Message header,
         short headerVersion,
@@ -213,6 +256,7 @@ public class SendBuilder implements Writable {
     ) {
         ObjectSerializationCache serializationCache = new ObjectSerializationCache();
 
+        // 有关消息的长度计算是通过该对象
         MessageSizeAccumulator messageSize = new MessageSizeAccumulator();
         header.addSize(messageSize, serializationCache, headerVersion);
         apiMessage.addSize(messageSize, serializationCache, apiVersion);

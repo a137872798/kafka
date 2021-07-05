@@ -34,16 +34,22 @@ import java.util.Map;
 
 /**
  * The state of our connection to each node in the cluster.
- *
+ * 该对象维护了与集群中其他节点的连接状态
  */
 final class ClusterConnectionStates {
     final static int RECONNECT_BACKOFF_EXP_BASE = 2;
     final static double RECONNECT_BACKOFF_JITTER = 0.2;
     final static int CONNECTION_SETUP_TIMEOUT_EXP_BASE = 2;
     final static double CONNECTION_SETUP_TIMEOUT_JITTER = 0.2;
+    /**
+     * nodeid作为key value存储的是连接状态
+     */
     private final Map<String, NodeConnectionState> nodeState;
     private final Logger log;
     private final HostResolver hostResolver;
+    /**
+     * 存储所有未完成的连接
+     */
     private Set<String> connectingNodes;
     private ExponentialBackoff reconnectBackoff;
     private ExponentialBackoff connectionSetupTimeout;
@@ -73,12 +79,15 @@ final class ClusterConnectionStates {
      * @param id the connection id to check
      * @param now the current time in ms
      * @return true if we can initiate a new connection
+     * 检测能否创建该节点的连接
      */
     public boolean canConnect(String id, long now) {
+        // 还未设置state 代表还未创建连接
         NodeConnectionState state = nodeState.get(id);
         if (state == null)
             return true;
         else
+            // 代表连接失败了 计算补偿时间差
             return state.state.isDisconnected() &&
                    now - state.lastConnectAttemptMs >= state.reconnectBackoffMs;
     }
@@ -128,6 +137,7 @@ final class ClusterConnectionStates {
      * Check whether a connection is either being established or awaiting API version information.
      * @param id The id of the node to check
      * @return true if the node is either connecting or has connected and is awaiting API versions, false otherwise
+     * 代表与该node的连接还未完成
      */
     public boolean isPreparingConnection(String id) {
         NodeConnectionState state = nodeState.get(id);
@@ -139,24 +149,30 @@ final class ClusterConnectionStates {
      * Enter the connecting state for the given connection, moving to a new resolved address if necessary.
      * @param id the id of the connection
      * @param now the current time in ms
-     * @param host the host of the connection, to be resolved internally if needed
-     * @param clientDnsLookup the mode of DNS lookup to use when resolving the {@code host}
+     * @param host the host of the connection, to be resolved internally if needed   节点地址信息
+     * @param clientDnsLookup the mode of DNS lookup to use when resolving the {@code host}   dns对象
+     *                        尝试与某个节点建立连接
      */
     public void connecting(String id, long now, String host, ClientDnsLookup clientDnsLookup) {
+        // 获取此时的连接状态
         NodeConnectionState connectionState = nodeState.get(id);
+        // 如果连接状态已经存在 并且地址没有改变 就代表是一次普通的重连
         if (connectionState != null && connectionState.host().equals(host)) {
             connectionState.lastConnectAttemptMs = now;
             connectionState.state = ConnectionState.CONNECTING;
             // Move to next resolved address, or if addresses are exhausted, mark node to be re-resolved
+            // 切换到下一个地址
             connectionState.moveToNextAddress();
             connectingNodes.add(id);
             return;
+            // 代表node.host信息发生变化
         } else if (connectionState != null) {
             log.info("Hostname for node {} changed from {} to {}.", id, connectionState.host(), host);
         }
 
         // Create a new NodeConnectionState if nodeState does not already contain one
         // for the specified id or if the hostname associated with the node id changed.
+        // 这里会新建一个state对象，如果id相同会覆盖旧数据
         nodeState.put(id, new NodeConnectionState(ConnectionState.CONNECTING, now,
                 reconnectBackoff.backoff(0), connectionSetupTimeout.backoff(0), host,
                 clientDnsLookup, hostResolver));
@@ -282,6 +298,7 @@ final class ClusterConnectionStates {
      *
      * @param id the connection identifier
      * @param now the current time in ms
+     *            判断与某个node的连接是否已经建立完成
      */
     public boolean isReady(String id, long now) {
         return isReady(nodeState.get(id), now);
@@ -463,6 +480,7 @@ final class ClusterConnectionStates {
 
     /**
      * The state of our connection to a node.
+     * 描述与某个node的连接状态
      */
     private static class NodeConnectionState {
 
@@ -474,6 +492,7 @@ final class ClusterConnectionStates {
         long reconnectBackoffMs;
         long connectionSetupTimeoutMs;
         // Connection is being throttled if current time < throttleUntilTimeMs.
+        // 如果当前时间小于限流时间的结束时间 会暂时性认为该连接不可用
         long throttleUntilTimeMs;
         private List<InetAddress> addresses;
         private int addressIndex;
@@ -481,6 +500,16 @@ final class ClusterConnectionStates {
         private final ClientDnsLookup clientDnsLookup;
         private final HostResolver hostResolver;
 
+        /**
+         *
+         * @param state
+         * @param lastConnectAttempt
+         * @param reconnectBackoffMs   可以简单的理解成一个随机数
+         * @param connectionSetupTimeoutMs    可以简单的理解成一个随机数
+         * @param host
+         * @param clientDnsLookup
+         * @param hostResolver
+         */
         private NodeConnectionState(ConnectionState state, long lastConnectAttempt, long reconnectBackoffMs,
                 long connectionSetupTimeoutMs, String host, ClientDnsLookup clientDnsLookup,
                 HostResolver hostResolver) {
@@ -510,6 +539,7 @@ final class ClusterConnectionStates {
         private InetAddress currentAddress() throws UnknownHostException {
             if (addresses.isEmpty()) {
                 // (Re-)initialize list
+                // 解析host生成一组地址
                 addresses = ClientUtils.resolve(host, clientDnsLookup, hostResolver);
                 addressIndex = 0;
             }
@@ -520,6 +550,7 @@ final class ClusterConnectionStates {
         /**
          * Jumps to the next available resolved address for this node. If no other addresses are available, marks the
          * list to be refreshed on the next {@link #currentAddress()} call.
+         * 如果某个node有多个地址 切换到下一个地址  解析完host可能会产生多个地址
          */
         private void moveToNextAddress() {
             if (addresses.isEmpty())

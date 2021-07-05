@@ -21,6 +21,7 @@ import java.util.Objects;
 
 /**
  * The <code>ClusterResource</code> class encapsulates metadata for a Kafka cluster.
+ * 描述某个集群发生了变化
  */
 public class ClusterResource {
 

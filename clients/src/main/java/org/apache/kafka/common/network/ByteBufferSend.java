@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 
 /**
  * A send backed by an array of byte buffers
+ * 某次调用flushPendingSend()时产生的对象
  */
 public class ByteBufferSend implements Send {
 
@@ -37,6 +38,10 @@ public class ByteBufferSend implements Send {
         this.size = remaining;
     }
 
+    /**
+     * @param buffers 本次send对象中包含的buffer数据
+     * @param size  这些buffer数据的总长度
+     */
     public ByteBufferSend(ByteBuffer[] buffers, long size) {
         this.buffers = buffers;
         this.size = size;

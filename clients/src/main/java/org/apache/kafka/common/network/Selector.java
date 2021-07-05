@@ -108,11 +108,18 @@ public class Selector implements Selectable, AutoCloseable {
     private boolean outOfMemory;
     private final List<NetworkSend> completedSends;
     private final LinkedHashMap<String, NetworkReceive> completedReceives;
+
+    /**
+     * 某些连接直接完成了就会存储到这个容器
+     */
     private final Set<SelectionKey> immediatelyConnectedKeys;
     private final Map<String, KafkaChannel> closingChannels;
     private Set<SelectionKey> keysWithBufferedRead;
     private final Map<String, ChannelState> disconnected;
     private final List<String> connected;
+    /**
+     * 存储往哪些node发送失败
+     */
     private final List<String> failedSends;
     private final Time time;
     private final SelectorMetrics sensors;
@@ -244,17 +251,23 @@ public class Selector implements Selectable, AutoCloseable {
      * @param receiveBufferSize The receive buffer for the new connection
      * @throws IllegalStateException if there is already a connection for that id
      * @throws IOException if DNS resolution fails on the hostname or if the broker is down
+     * 网络模块与某个地址建立连接 调用该方法的是业务线程 真正的连接逻辑在io线程中执行
      */
     @Override
     public void connect(String id, InetSocketAddress address, int sendBufferSize, int receiveBufferSize) throws IOException {
+        // 避免重复连接
         ensureNotRegistered(id);
         SocketChannel socketChannel = SocketChannel.open();
         SelectionKey key = null;
         try {
+            // 配置channel对象
             configureSocketChannel(socketChannel, sendBufferSize, receiveBufferSize);
+            // 这里尝试性建立连接 失败就等待选择器监听事件
             boolean connected = doConnect(socketChannel, address);
+            // 将channel包装成kafkaChannel后 绑定到selectionKey上
             key = registerChannel(id, socketChannel, SelectionKey.OP_CONNECT);
 
+            // 如果连接立即成功了 移除监听连接事件
             if (connected) {
                 // OP_CONNECT won't trigger for immediately connected channels
                 log.debug("Immediately connected to node {}", id);
@@ -280,6 +293,13 @@ public class Selector implements Selectable, AutoCloseable {
         }
     }
 
+    /**
+     * 将channel配置成非阻塞模式
+     * @param socketChannel
+     * @param sendBufferSize
+     * @param receiveBufferSize
+     * @throws IOException
+     */
     private void configureSocketChannel(SocketChannel socketChannel, int sendBufferSize, int receiveBufferSize)
             throws IOException {
         socketChannel.configureBlocking(false);
@@ -324,19 +344,34 @@ public class Selector implements Selectable, AutoCloseable {
             throw new IllegalStateException("There is already a connection for id " + id + " that is still being closed");
     }
 
+    /**
+     * 将channel包装成 kafkaChannel后 绑定到selectionKey上
+     */
     protected SelectionKey registerChannel(String id, SocketChannel socketChannel, int interestedOps) throws IOException {
         SelectionKey key = socketChannel.register(nioSelector, interestedOps);
+        // 将相关参数包装成kafkaChannel 并绑定在key上
         KafkaChannel channel = buildAndAttachKafkaChannel(socketChannel, id, key);
         this.channels.put(id, channel);
+        // 该对象负责检测所有连接的活跃时间 长时间不使用的连接会被回收
         if (idleExpiryManager != null)
             idleExpiryManager.update(channel.id(), time.nanoseconds());
         return key;
     }
 
+    /**
+     * 生成kafkaChannel
+     * @param socketChannel
+     * @param id
+     * @param key
+     * @return
+     * @throws IOException
+     */
     private KafkaChannel buildAndAttachKafkaChannel(SocketChannel socketChannel, String id, SelectionKey key) throws IOException {
         try {
             KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize, memoryPool,
                 new SelectorChannelMetadataRegistry());
+
+            // 将channel绑定在key上
             key.attach(channel);
             return channel;
         } catch (Exception e) {
@@ -382,15 +417,19 @@ public class Selector implements Selectable, AutoCloseable {
     /**
      * Queue the given request for sending in the subsequent {@link #poll(long)} calls
      * @param send The request to send
+     *             将某个send对象通过网络传输
      */
     public void send(NetworkSend send) {
         String connectionId = send.destinationId();
+        // 通过nodeid找到对应的channel
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
+        // 如果当前连接正在关闭 本次发送失败
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
             this.failedSends.add(connectionId);
         } else {
             try {
+                // 网络模块使用的是事件循环模型， 所以在本线程不会真正发送写入操作 而是将对象设置到channel   可以看到kafka设计的特殊之处 尽可能让数据的合并在业务线程完成 io线程只会发送合并完的数据
                 channel.setSend(send);
             } catch (Exception e) {
                 // update the state for consistency, the channel will be discarded after `close`
@@ -964,6 +1003,7 @@ public class Selector implements Selectable, AutoCloseable {
 
     /**
      * check if channel is ready
+     * 检测某个nodeid关联的channel是否准备完毕
      */
     @Override
     public boolean isChannelReady(String id) {
@@ -1413,6 +1453,7 @@ public class Selector implements Selectable, AutoCloseable {
     }
 
     // helper class for tracking least recently used connections to enable idle connection closing
+    // 管理每个连接的使用情况
     private static class IdleExpiryManager {
         private final Map<String, Long> lruConnections;
         private final long connectionsMaxIdleNanos;
@@ -1425,6 +1466,11 @@ public class Selector implements Selectable, AutoCloseable {
             this.nextIdleCloseCheckTime = time.nanoseconds() + this.connectionsMaxIdleNanos;
         }
 
+        /**
+         * 更新某个channel的活跃时间
+         * @param connectionId
+         * @param currentTimeNanos
+         */
         public void update(String connectionId, long currentTimeNanos) {
             lruConnections.put(connectionId, currentTimeNanos);
         }

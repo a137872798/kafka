@@ -20,6 +20,7 @@ import java.io.IOException;
 
 /**
  * This interface models the in-progress sending of data.
+ * req对象在网络层会被封装成send对象 内部主要是封装了与channel交互的逻辑
  */
 public interface Send {
 

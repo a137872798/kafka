@@ -31,6 +31,7 @@ import java.util.Queue;
 
 /**
  * A set of composite sends with nested {@link RecordsSend}, sent one after another
+ * 将多个send对象包装成一个
  */
 public class MultiRecordsSend implements Send {
     private static final Logger log = LoggerFactory.getLogger(MultiRecordsSend.class);

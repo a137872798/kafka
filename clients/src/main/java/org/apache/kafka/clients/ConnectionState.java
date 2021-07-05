@@ -26,8 +26,13 @@ package org.apache.kafka.clients;
  * AUTHENTICATION_FAILED: connection failed due to an authentication error
  */
 public enum ConnectionState {
+    // 以下状态只有 READY认为连接可用
     DISCONNECTED, CONNECTING, CHECKING_API_VERSIONS, READY, AUTHENTICATION_FAILED;
 
+    /**
+     * 连接失败 这个是可以发起重试的
+     * @return
+     */
     public boolean isDisconnected() {
         return this == AUTHENTICATION_FAILED || this == DISCONNECTED;
     }

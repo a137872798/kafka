@@ -18,6 +18,9 @@ package org.apache.kafka.common.network;
 
 import java.io.IOException;
 
+/**
+ * 内部包含了与channel交互的逻辑 以及数据包
+ */
 public class NetworkSend implements Send {
     private final String destinationId;
     private final Send send;
