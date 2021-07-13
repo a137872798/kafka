@@ -29,6 +29,7 @@ import java.util.Map;
  * Implement {@link org.apache.kafka.common.ClusterResourceListener} to receive cluster metadata once it's available. Please see the class documentation for ClusterResourceListener for more information.
  *
  * @param <T> Type to be serialized from.
+ *           序列化对象 决定了key/value的序列化方式
  */
 public interface Serializer<T> extends Closeable {
 
@@ -36,6 +37,7 @@ public interface Serializer<T> extends Closeable {
      * Configure this class.
      * @param configs configs in key/value pairs
      * @param isKey whether is for key or value
+     *              对实现类进行装配
      */
     default void configure(Map<String, ?> configs, boolean isKey) {
         // intentionally left blank

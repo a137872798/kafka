@@ -16,6 +16,9 @@
  */
 package org.apache.kafka.clients.consumer;
 
+/**
+ * 有关偏移量的消费策略 从最早的偏移量或者最新的偏移量开始消费
+ */
 public enum OffsetResetStrategy {
     LATEST, EARLIEST, NONE
 }

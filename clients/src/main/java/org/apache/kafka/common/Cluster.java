@@ -204,6 +204,7 @@ public final class Cluster {
      * Create a "bootstrap" cluster using the given list of host/ports
      * @param addresses The addresses
      * @return A cluster for these hosts/ports
+     * 将address转换成集群中的 node
      */
     public static Cluster bootstrap(List<InetSocketAddress> addresses) {
         List<Node> nodes = new ArrayList<>();
@@ -267,6 +268,7 @@ public final class Cluster {
         if (info == null)
             return null;
         else
+            // 只会往leader写入数据
             return info.leader();
     }
 
@@ -283,6 +285,7 @@ public final class Cluster {
      * Get the list of partitions for this topic
      * @param topic The topic name
      * @return A list of partitions
+     * 获取该集群下某个topic的所有分区 简单讲就是发送了一个获取元数据的请求 之后解析成了集群对象
      */
     public List<PartitionInfo> partitionsForTopic(String topic) {
         return partitionsByTopic.getOrDefault(topic, Collections.emptyList());
@@ -292,6 +295,7 @@ public final class Cluster {
      * Get the number of partitions for the given topic.
      * @param topic The topic to get the number of partitions for
      * @return The number of partitions or null if there is no corresponding metadata
+     * 返回topic下的分区数量
      */
     public Integer partitionCountForTopic(String topic) {
         List<PartitionInfo> partitions = this.partitionsByTopic.get(topic);
@@ -302,6 +306,8 @@ public final class Cluster {
      * Get the list of available partitions for this topic
      * @param topic The topic name
      * @return A list of partitions
+     * 返回所有可用的分区信息  也就是从server上获取到元数据时 内部可能就标记了某些分区此时不可用
+     * 什么情况下分区会不可用呢
      */
     public List<PartitionInfo> availablePartitionsForTopic(String topic) {
         return availablePartitionsByTopic.getOrDefault(topic, Collections.emptyList());

@@ -48,7 +48,7 @@ public class ClientResponse {
      * @param createdTimeMs The unix timestamp when the corresponding request was created
      * @param destination The node the corresponding request was sent to
      * @param receivedTimeMs The unix timestamp when this response was received
-     * @param disconnected Whether the client disconnected before fully reading a response
+     * @param disconnected Whether the client disconnected before fully reading a response   代表本次结果是因为断开连接产生的
      * @param versionMismatch Whether there was a version mismatch that prevented sending the request.
      * @param responseBody The response contents (or null) if we disconnected, no response was expected,
      *                     or if there was a version mismatch.

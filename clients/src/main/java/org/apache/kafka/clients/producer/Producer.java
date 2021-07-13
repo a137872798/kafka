@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
  * The interface for the {@link KafkaProducer}
  * @see KafkaProducer
  * @see MockProducer
+ * 生产者接口对应的2种范型分别是head和data
  */
 public interface Producer<K, V> extends Closeable {
 

@@ -23,8 +23,8 @@ import java.io.Closeable;
 
 /**
  * Partitioner Interface
+ * 注意分区器接口本身是一个Configurable 也就是他的实现类在初始化后 kafka会自动对它进行装配
  */
-
 public interface Partitioner extends Configurable, Closeable {
 
     /**
@@ -36,6 +36,7 @@ public interface Partitioner extends Configurable, Closeable {
      * @param value The value to partition on or null
      * @param valueBytes The serialized value to partition on or null
      * @param cluster The current cluster metadata
+     *                通过传入的topic和key等信息 定位到某个分区
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster);
 
@@ -51,6 +52,7 @@ public interface Partitioner extends Configurable, Closeable {
      * @param topic The topic name
      * @param cluster The current cluster metadata
      * @param prevPartition The partition previously selected for the record that triggered a new batch
+     *                      在append消息到accumulator时 如果创建了新的batch 就会触发该方法
      */
     default public void onNewBatch(String topic, Cluster cluster, int prevPartition) {
     }

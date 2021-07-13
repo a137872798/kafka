@@ -34,6 +34,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+/**
+ * 通过该对象封装nioChannel 生成kafkaChannel
+ */
 public class PlaintextChannelBuilder implements ChannelBuilder {
     private static final Logger log = LoggerFactory.getLogger(PlaintextChannelBuilder.class);
     private final ListenerName listenerName;
@@ -51,11 +54,23 @@ public class PlaintextChannelBuilder implements ChannelBuilder {
         this.configs = configs;
     }
 
+    /**
+     *
+     * @param  id  channel id
+     * @param  key SelectionKey
+     * @param  maxReceiveSize max size of a single receive buffer to allocate
+     * @param  memoryPool memory pool from which to allocate buffers, or null for none
+     * @param metadataRegistry  sensor相关的 先忽略
+     * @return
+     * @throws KafkaException
+     */
     @Override
     public KafkaChannel buildChannel(String id, SelectionKey key, int maxReceiveSize,
                                      MemoryPool memoryPool, ChannelMetadataRegistry metadataRegistry) throws KafkaException {
         try {
+            // 构建直接与socket交互的 传输层对象
             PlaintextTransportLayer transportLayer = buildTransportLayer(key);
+            // 认证对象
             Supplier<Authenticator> authenticatorCreator = () -> new PlaintextAuthenticator(configs, transportLayer, listenerName);
             return buildChannel(id, transportLayer, authenticatorCreator, maxReceiveSize,
                     memoryPool != null ? memoryPool : MemoryPool.NONE, metadataRegistry);

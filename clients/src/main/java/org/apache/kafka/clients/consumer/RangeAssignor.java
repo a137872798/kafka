@@ -63,6 +63,8 @@ import java.util.Map;
  * <li><code>I0: [t0p0, t0p1, t1p0, t1p1]</code>
  * <li><code>I1: [t0p2, t1p2]</code>
  * </ul>
+ * 默认情况下的分区对象
+ * 该对象不会提供userData (userData会影响到rebalance结果)
  */
 public class RangeAssignor extends AbstractPartitionAssignor {
 
@@ -76,6 +78,7 @@ public class RangeAssignor extends AbstractPartitionAssignor {
         for (Map.Entry<String, Subscription> subscriptionEntry : consumerMetadata.entrySet()) {
             String consumerId = subscriptionEntry.getKey();
             MemberInfo memberInfo = new MemberInfo(consumerId, subscriptionEntry.getValue().groupInstanceId());
+            // 这里以topic为单位 存储了订阅某个topic的所有member
             for (String topic : subscriptionEntry.getValue().topics()) {
                 put(topicToConsumers, topic, memberInfo);
             }
@@ -83,11 +86,22 @@ public class RangeAssignor extends AbstractPartitionAssignor {
         return topicToConsumers;
     }
 
+    /**
+     * 分配在这里进行
+     * @param partitionsPerTopic The number of partitions for each subscribed topic. Topics not in metadata will be excluded
+     *                           from this map.  本次订阅的所有topic以及他们的所有分区
+     * @param subscriptions Map from the member id to their respective topic subscription
+     *                      之前member在发出join请求时携带的自己的订阅信息 以及期望保留的tp
+     *                      每个assignor对象的分配逻辑不同 range就忽略了每个consumer期望保留的tp
+     * @return
+     */
     @Override
     public Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
                                                     Map<String, Subscription> subscriptions) {
+        // 转换成topic为key value是订阅了这个topic的所有member
         Map<String, List<MemberInfo>> consumersPerTopic = consumersPerTopic(subscriptions);
 
+        // 存储分配的结果  key对应memberId value对应分配的所有tp
         Map<String, List<TopicPartition>> assignment = new HashMap<>();
         for (String memberId : subscriptions.keySet())
             assignment.put(memberId, new ArrayList<>());
@@ -96,15 +110,18 @@ public class RangeAssignor extends AbstractPartitionAssignor {
             String topic = topicEntry.getKey();
             List<MemberInfo> consumersForTopic = topicEntry.getValue();
 
+            // 获取分区数量
             Integer numPartitionsForTopic = partitionsPerTopic.get(topic);
             if (numPartitionsForTopic == null)
                 continue;
 
             Collections.sort(consumersForTopic);
 
+            // 不算是轮询 而是相邻的几个partition都分配给同一个consumer
             int numPartitionsPerConsumer = numPartitionsForTopic / consumersForTopic.size();
             int consumersWithExtraPartition = numPartitionsForTopic % consumersForTopic.size();
 
+            // 生成一组tp对象
             List<TopicPartition> partitions = AbstractPartitionAssignor.partitions(topic, numPartitionsForTopic);
             for (int i = 0, n = consumersForTopic.size(); i < n; i++) {
                 int start = numPartitionsPerConsumer * i + Math.min(i, consumersWithExtraPartition);

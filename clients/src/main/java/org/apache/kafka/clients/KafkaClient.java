@@ -58,7 +58,7 @@ public interface KafkaClient extends Closeable {
      * @param node The node to check
      * @param now The current timestamp
      * @return The number of milliseconds to wait.
-     * 基于与该节点当前的连接状态返回一个延迟时间 比如发现此时连接断开 返回的就是重连时间间隔
+     * 计算重连的补偿时间
      */
     long connectionDelay(Node node, long now);
 
@@ -179,7 +179,7 @@ public interface KafkaClient extends Closeable {
 
     /**
      * Wake up the client if it is currently blocked waiting for I/O
-     * 唤醒时间循转
+     * 唤醒事件循转
      */
     void wakeup();
 

@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 
 /**
  * A helper class for managing the heartbeat to the coordinator
+ * 该对象用于管理有关coordinator的心跳请求
  */
 public final class Heartbeat {
     private final int maxPollIntervalMs;
@@ -35,11 +36,18 @@ public final class Heartbeat {
     private final Timer pollTimer;
     private final Logger log;
 
+    // 是否正在等待心跳结果 以及发送时间
     private volatile long lastHeartbeatSend = 0L;
     private volatile boolean heartbeatInFlight = false;
 
+    /**
+     * 初始化心跳对象
+     * @param config
+     * @param time
+     */
     public Heartbeat(GroupRebalanceConfig config,
                      Time time) {
+        // 首先心跳间隔不能超过一个会话长度
         if (config.heartbeatIntervalMs >= config.sessionTimeoutMs)
             throw new IllegalArgumentException("Heartbeat must be set lower than the session timeout");
         this.rebalanceConfig = config;
@@ -53,6 +61,10 @@ public final class Heartbeat {
         this.log = logContext.logger(getClass());
     }
 
+    /**
+     * 当发出心跳请求后会更新相关时间戳
+     * @param now
+     */
     private void update(long now) {
         heartbeatTimer.update(now);
         sessionTimer.update(now);
@@ -68,6 +80,10 @@ public final class Heartbeat {
         return heartbeatInFlight;
     }
 
+    /**
+     * 针对coordinator发送心跳检测
+     * @param now
+     */
     void sentHeartbeat(long now) {
         lastHeartbeatSend = now;
         heartbeatInFlight = true;
@@ -87,6 +103,9 @@ public final class Heartbeat {
         log.trace("Heartbeat failed, reset the timer to {}ms remaining", heartbeatTimer.remainingMs());
     }
 
+    /**
+     * 更新相关属性
+     */
     void receiveHeartbeat() {
         update(time.milliseconds());
         heartbeatInFlight = false;

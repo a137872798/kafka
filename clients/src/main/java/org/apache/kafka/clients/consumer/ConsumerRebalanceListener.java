@@ -115,6 +115,7 @@ import org.apache.kafka.common.TopicPartition;
  *   }
  * }
  * </pre>
+ * 在消费者本地会缓存订阅的tp 当协调对象发现某个消费者下线后 可能会发起rebalance就会更新tp  用户可以监听这个动作
  */
 public interface ConsumerRebalanceListener {
 
@@ -193,6 +194,7 @@ public interface ConsumerRebalanceListener {
      *                   be some partitions left)
      * @throws org.apache.kafka.common.errors.WakeupException If raised from a nested call to {@link KafkaConsumer}
      * @throws org.apache.kafka.common.errors.InterruptException If raised from a nested call to {@link KafkaConsumer}
+     * 由于gen的重置导致之前缓存的tp被丢弃时 触发该方法
      */
     default void onPartitionsLost(Collection<TopicPartition> partitions) {
         onPartitionsRevoked(partitions);

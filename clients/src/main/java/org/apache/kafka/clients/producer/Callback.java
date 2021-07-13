@@ -19,6 +19,7 @@ package org.apache.kafka.clients.producer;
 /**
  * A callback interface that the user can implement to allow code to execute when the request is complete. This callback
  * will generally execute in the background I/O thread so it should be fast.
+ * kafka内置的回调接口 用于处理发送成功后的结果对象
  */
 public interface Callback {
 

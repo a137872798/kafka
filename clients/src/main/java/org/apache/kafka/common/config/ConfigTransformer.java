@@ -51,11 +51,15 @@ import java.util.regex.Pattern;
  * <p>This class only depends on {@link ConfigProvider#get(String, Set)} and does not depend on subscription support
  * in a {@link ConfigProvider}, such as the {@link ConfigProvider#subscribe(String, Set, ConfigChangeCallback)} and
  * {@link ConfigProvider#unsubscribe(String, Set, ConfigChangeCallback)} methods.
+ * 该对象负责协调provider与原始配置(map) 通过provider提供的值替换map中配置值的占位符
  */
 public class ConfigTransformer {
     public static final Pattern DEFAULT_PATTERN = Pattern.compile("\\$\\{([^}]*?):(([^}]*?):)?([^}]*?)\\}");
     private static final String EMPTY_PATH = "";
 
+    /**
+     * 通过这组provider提供占位符的值
+     */
     private final Map<String, ConfigProvider> configProviders;
 
     /**
@@ -73,6 +77,7 @@ public class ConfigTransformer {
      *
      * @param configs the configuration values to be transformed
      * @return an instance of {@link ConfigTransformerResult}
+     * 找到config中的占位符 并从这组provider对象中生成相关信息
      */
     public ConfigTransformerResult transform(Map<String, String> configs) {
         Map<String, Map<String, Set<String>>> keysByProvider = new HashMap<>();
@@ -81,8 +86,10 @@ public class ConfigTransformer {
         // Collect the variables from the given configs that need transformation
         for (Map.Entry<String, String> config : configs.entrySet()) {
             if (config.getValue() != null) {
+                // 找到占位符
                 List<ConfigVariable> vars = getVars(config.getValue(), DEFAULT_PATTERN);
                 for (ConfigVariable var : vars) {
+                    // 外层是providerName 内层是配置值path 最后是占位符
                     Map<String, Set<String>> keysByPath = keysByProvider.computeIfAbsent(var.providerName, k -> new HashMap<>());
                     Set<String> keys = keysByPath.computeIfAbsent(var.path, k -> new HashSet<>());
                     keys.add(var.variable);
@@ -91,6 +98,7 @@ public class ConfigTransformer {
         }
 
         // Retrieve requested variables from the ConfigProviders
+        // 上面已经提取出了所有占位符 这里从provider中找到对应的值
         Map<String, Long> ttls = new HashMap<>();
         for (Map.Entry<String, Map<String, Set<String>>> entry : keysByProvider.entrySet()) {
             String providerName = entry.getKey();
@@ -99,13 +107,16 @@ public class ConfigTransformer {
             if (provider != null && keysByPath != null) {
                 for (Map.Entry<String, Set<String>> pathWithKeys : keysByPath.entrySet()) {
                     String path = pathWithKeys.getKey();
+                    // 该path下所有占位符的key
                     Set<String> keys = new HashSet<>(pathWithKeys.getValue());
+                    // 通过provider得到配置数据
                     ConfigData configData = provider.get(path, keys);
                     Map<String, String> data = configData.data();
                     Long ttl = configData.ttl();
                     if (ttl != null && ttl >= 0) {
                         ttls.put(path, ttl);
                     }
+                    // 将最后的结果存储到该map中
                     Map<String, Map<String, String>> keyValuesByPath =
                             lookupsByProvider.computeIfAbsent(providerName, k -> new HashMap<>());
                     keyValuesByPath.put(path, data);
@@ -116,6 +127,7 @@ public class ConfigTransformer {
         // Perform the transformations by performing variable replacements
         Map<String, String> data = new HashMap<>(configs);
         for (Map.Entry<String, String> config : configs.entrySet()) {
+            // 使用替换后的数据覆盖旧数据
             data.put(config.getKey(), replace(lookupsByProvider, config.getValue(), DEFAULT_PATTERN));
         }
         return new ConfigTransformerResult(data, ttls);
@@ -159,7 +171,13 @@ public class ConfigTransformer {
         return builder.toString();
     }
 
+    /**
+     * 当匹配到某个占位符时 生成该对象
+     */
     private static class ConfigVariable {
+        /**
+         * 代表该占位符的数据需要从哪个provider上获取
+         */
         final String providerName;
         final String path;
         final String variable;

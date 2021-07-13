@@ -23,6 +23,7 @@ import org.apache.kafka.common.requests.ProduceResponse;
 
 /**
  * The metadata for a record that has been acknowledged by the server
+ * 当发送消息后返回的结果对象 会包含一些有关偏移量的信息
  */
 public final class RecordMetadata {
 

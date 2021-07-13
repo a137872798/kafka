@@ -37,6 +37,7 @@ import java.util.TreeMap;
  * A convenient base class for configurations to extend.
  * <p>
  * This class holds both the original configuration that was provided as well as the parsed
+ * 配置骨架类
  */
 public class AbstractConfig {
 
@@ -91,28 +92,35 @@ public class AbstractConfig {
      * be left unchanged in the configuration.
      *
      *
-     * @param definition the definition of the configurations; may not be null
-     * @param originals the configuration properties plus any optional config provider properties;
+     * @param definition the definition of the configurations; may not be null   描述该config下所有配置项的定义
+     * @param originals the configuration properties plus any optional config provider properties;  存储了配置的原始数据
      * @param configProviderProps the map of properties of config providers which will be instantiated by
-     *        the constructor to resolve any variables in {@code originals}; may be null or empty
+     *        the constructor to resolve any variables in {@code originals}; may be null or empty 某些配置项可能是由configProvider提供的 该map中存储provider信息
      * @param doLog whether the configurations should be logged
      */
     @SuppressWarnings("unchecked")
     public AbstractConfig(ConfigDef definition, Map<?, ?> originals,  Map<String, ?> configProviderProps, boolean doLog) {
-        /* check that all the keys are really strings */
+        /* check that all the keys are really strings
+        * 配置项的key 要求必须是string类型
+        * */
         for (Map.Entry<?, ?> entry : originals.entrySet())
             if (!(entry.getKey() instanceof String))
                 throw new ConfigException(entry.getKey().toString(), entry.getValue(), "Key must be a string.");
 
+        // 处理配置项中的占位符
         this.originals = resolveConfigVariables(configProviderProps, (Map<String, Object>) originals);
+        // 将配置项通过def处理 抽取出了本config需要的全部配置值
         this.values = definition.parse(this.originals);
         this.used = Collections.synchronizedSet(new HashSet<>());
+        // 可能需要对解析完成的map 进一步处理
         Map<String, Object> configUpdates = postProcessParsedConfig(Collections.unmodifiableMap(this.values));
         for (Map.Entry<String, Object> update : configUpdates.entrySet()) {
             this.values.put(update.getKey(), update.getValue());
         }
+        // 再次通过def做校验
         definition.parse(this.values);
         this.definition = definition;
+        // 忽略日志打印
         if (doLog)
             logAll();
     }
@@ -122,8 +130,8 @@ public class AbstractConfig {
      * which can include properties for zero or more {@link ConfigProvider}
      * that will be used to resolve variables in configuration property values.
      *
-     * @param definition the definition of the configurations; may not be null
-     * @param originals the configuration properties plus any optional config provider properties; may not be null
+     * @param definition the definition of the configurations; may not be null   描述了本配置下所有配置项限制
+     * @param originals the configuration properties plus any optional config provider properties; may not be null  本次传入的配置值，将会使用map中的数据来初始化config
      */
     public AbstractConfig(ConfigDef definition, Map<?, ?> originals) {
         this(definition, originals, Collections.emptyMap(), true);
@@ -380,23 +388,36 @@ public class AbstractConfig {
             log.warn("The configuration '{}' was supplied but isn't a known config.", key);
     }
 
+    /**
+     *
+     * @param klass
+     * @param t 要求生成的实例必须满足该接口
+     * @param configPairs
+     * @param <T>
+     * @return
+     */
     private <T> T getConfiguredInstance(Object klass, Class<T> t, Map<String, Object> configPairs) {
         if (klass == null)
             return null;
 
         Object o;
+        // 如果传入的是string类型 代表是类的全限定名
         if (klass instanceof String) {
             try {
                 o = Utils.newInstance((String) klass, t);
             } catch (ClassNotFoundException e) {
                 throw new KafkaException("Class " + klass + " cannot be found", e);
             }
+            // 代表传入的是class对象
         } else if (klass instanceof Class<?>) {
             o = Utils.newInstance((Class<?>) klass);
         } else
             throw new KafkaException("Unexpected element of type " + klass.getClass().getName() + ", expected String or Class");
+
+        // 检测是否满足t接口
         if (!t.isInstance(o))
             throw new KafkaException(klass + " is not an instance of " + t.getName());
+        // 如果是可装备对象 自动完成装配
         if (o instanceof Configurable)
             ((Configurable) o).configure(configPairs);
 
@@ -427,6 +448,7 @@ public class AbstractConfig {
     public <T> T getConfiguredInstance(String key, Class<T> t, Map<String, Object> configOverrides) {
         Class<?> c = getClass(key);
 
+        // 根据配置项描述的class信息 实例化对象
         return getConfiguredInstance(c, t, originals(configOverrides));
     }
 
@@ -477,6 +499,11 @@ public class AbstractConfig {
         return objects;
     }
 
+    /**
+     * 首先当配置项的value 也是string时 才有可能存在占位符
+     * @param configMap
+     * @return
+     */
     private Map<String, String> extractPotentialVariables(Map<?, ?>  configMap) {
         // Variables are tuples of the form "${providerName:[path:]key}". From the configMap we extract the subset of configs with string
         // values as potential variables.
@@ -495,6 +522,7 @@ public class AbstractConfig {
      * @param configProviderProps The map of config provider configs
      * @param originals The map of raw configs.
      * @return map of resolved config variable.
+     * 配置项的值可能存在占位符 这里要进行处理
      */
     @SuppressWarnings("unchecked")
     private  Map<String, ?> resolveConfigVariables(Map<String, ?> configProviderProps, Map<String, Object> originals) {
@@ -502,9 +530,11 @@ public class AbstractConfig {
         Map<String, ?> configProperties;
         Map<String, Object> resolvedOriginals = new HashMap<>();
         // As variable configs are strings, parse the originals and obtain the potential variable configs.
+        // 找到可能存在占位符的所有配置项
         Map<String, String> indirectVariables = extractPotentialVariables(originals);
 
         resolvedOriginals.putAll(originals);
+        // 如果该容器为空 代表使用originals中其他配置项来填充占位符
         if (configProviderProps == null || configProviderProps.isEmpty()) {
             providerConfigString = indirectVariables;
             configProperties = originals;
@@ -512,20 +542,32 @@ public class AbstractConfig {
             providerConfigString = extractPotentialVariables(configProviderProps);
             configProperties = configProviderProps;
         }
+
+        // 基于这些信息生成 configProvider对象
         Map<String, ConfigProvider> providers = instantiateConfigProviders(providerConfigString, configProperties);
 
+        // 现在通过provider提供原始配置项中的占位符
         if (!providers.isEmpty()) {
             ConfigTransformer configTransformer = new ConfigTransformer(providers);
             ConfigTransformerResult result = configTransformer.transform(indirectVariables);
             if (!result.data().isEmpty()) {
+                // 将处理过占位符的结果设置进去 相同的key会覆盖 这样resolvedOriginals中就只存储了处理过占位符的配置项了
                 resolvedOriginals.putAll(result.data());
             }
         }
+        // provider在使用外后 需要被关闭
         providers.values().forEach(x -> Utils.closeQuietly(x, "config provider"));
 
+        // 返回一个同时保存原始数据和解析后数据的map
         return new ResolvingMap<>(resolvedOriginals, originals);
     }
 
+    /**
+     * 获取某个provider下所有的参数信息 通过传入provider.params的参数前缀匹配
+     * @param configProviderPrefix
+     * @param providerConfigProperties
+     * @return
+     */
     private Map<String, Object> configProviderProperties(String configProviderPrefix, Map<String, ?> providerConfigProperties) {
         Map<String, Object> result = new HashMap<>();
         for (Map.Entry<String, ?> entry : providerConfigProperties.entrySet()) {
@@ -546,30 +588,42 @@ public class AbstractConfig {
      * @param indirectConfigs The map of potential variable configs
      * @param providerConfigProperties The map of config provider configs
      * @return map map of config provider name and its instance.
+     * 基于这些信息生成configProvider对象
      */
     private Map<String, ConfigProvider> instantiateConfigProviders(Map<String, String> indirectConfigs, Map<String, ?> providerConfigProperties) {
+        // 获取有关provider的信息 该配置项是一个string类型
         final String configProviders = indirectConfigs.get(CONFIG_PROVIDERS_CONFIG);
 
+        // 本次没有provider相关的配置项 忽略
         if (configProviders == null || configProviders.isEmpty()) {
             return Collections.emptyMap();
         }
 
         Map<String, String> providerMap = new HashMap<>();
 
+        // 代表存在provider信息 对信息进行拆解
         for (String provider: configProviders.split(",")) {
+            // 得到一组provider的类型
             String providerClass = CONFIG_PROVIDERS_CONFIG + "." + provider + ".class";
+            // value就是className
             if (indirectConfigs.containsKey(providerClass))
                 providerMap.put(provider, indirectConfigs.get(providerClass));
 
         }
         // Instantiate Config Providers
         Map<String, ConfigProvider> configProviderInstances = new HashMap<>();
+        // 这里开始基于value的信息实例化provider对象
         for (Map.Entry<String, String> entry : providerMap.entrySet()) {
             try {
+                // 获取初始化该provider时需要的参数信息
                 String prefix = CONFIG_PROVIDERS_CONFIG + "." + entry.getKey() + CONFIG_PROVIDERS_PARAM;
+                // 从providerConfigProperties获取需要的参数
                 Map<String, ?> configProperties = configProviderProperties(prefix, providerConfigProperties);
+                // 反射创建实例
                 ConfigProvider provider = Utils.newInstance(entry.getValue(), ConfigProvider.class);
+                // 将相关参数配置进去
                 provider.configure(configProperties);
+                // 将provider返回
                 configProviderInstances.put(entry.getKey(), provider);
             } catch (ClassNotFoundException e) {
                 log.error("ClassNotFoundException exception occurred: " + entry.getValue());
@@ -647,6 +701,7 @@ public class AbstractConfig {
      * any access to a value for a key needs to be recorded on the originals map.
      * The resolved configs are kept in the inherited map and are therefore mutable, though any
      * mutations are not applied to the originals.
+     * 该map同时存储了未解析数据的config 和解析后的config
      */
     private static class ResolvingMap<V> extends HashMap<String, V> {
 
@@ -661,6 +716,7 @@ public class AbstractConfig {
         public V get(Object key) {
             if (key instanceof String && originals.containsKey(key)) {
                 // Intentionally ignore the result; call just to mark the original entry as used
+                // 调用get仅为了修改used标记
                 originals.get(key);
             }
             // But always use the resolved entry

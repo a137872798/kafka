@@ -23,6 +23,9 @@ import java.util.Objects;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.utils.Utils;
 
+/**
+ * 单个消息头  每个消息上可以挂载一组消息头
+ */
 public class RecordHeader implements Header {
     private ByteBuffer keyBuffer;
     private String key;

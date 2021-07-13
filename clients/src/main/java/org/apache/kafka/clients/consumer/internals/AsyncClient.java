@@ -23,6 +23,13 @@ import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.utils.LogContext;
 import org.slf4j.Logger;
 
+/**
+ * 异步客户端对象
+ * @param <T1>
+ * @param <Req>
+ * @param <Resp>
+ * @param <T2>
+ */
 public abstract class AsyncClient<T1, Req extends AbstractRequest, Resp extends AbstractResponse, T2> {
 
     private final Logger log;

@@ -154,6 +154,7 @@ public class Fetcher<K, V> implements Closeable {
     private final IsolationLevel isolationLevel;
     private final Map<Integer, FetchSessionHandler> sessionHandlers;
     private final AtomicReference<RuntimeException> cachedListOffsetsException = new AtomicReference<>();
+
     private final AtomicReference<RuntimeException> cachedOffsetForLeaderException = new AtomicReference<>();
     private final OffsetsForLeaderEpochClient offsetsForLeaderEpochClient;
     private final Set<Integer> nodesWithPendingFetchRequests;
@@ -163,6 +164,29 @@ public class Fetcher<K, V> implements Closeable {
 
     private CompletedFetch nextInLineFetch = null;
 
+    /**
+     * 用于向server拉取数据的消费者
+     * @param logContext
+     * @param client
+     * @param minBytes
+     * @param maxBytes
+     * @param maxWaitMs
+     * @param fetchSize
+     * @param maxPollRecords
+     * @param checkCrcs
+     * @param clientRackId
+     * @param keyDeserializer
+     * @param valueDeserializer
+     * @param metadata
+     * @param subscriptions
+     * @param metrics
+     * @param metricsRegistry
+     * @param time
+     * @param retryBackoffMs
+     * @param requestTimeoutMs
+     * @param isolationLevel
+     * @param apiVersions
+     */
     public Fetcher(LogContext logContext,
                    ConsumerNetworkClient client,
                    int minBytes,
@@ -483,23 +507,28 @@ public class Fetcher<K, V> implements Closeable {
 
     /**
      * Validate offsets for all assigned partitions for which a leader change has been detected.
+     * 先校验偏移量
      */
     public void validateOffsetsIfNeeded() {
+        // 代表之前拉取偏移量时出现了异常 直接抛出
         RuntimeException exception = cachedOffsetForLeaderException.getAndSet(null);
         if (exception != null)
             throw exception;
 
         // Validate each partition against the current leader and epoch
         // If we see a new metadata version, check all partitions
+        // 在这里可能会将某些 fetchState修改成待校验状态
         validatePositionsOnMetadataChange();
 
         // Collect positions needing validation, with backoff
+        // 这里将所有待校验的position取出来
         Map<TopicPartition, FetchPosition> partitionsToValidate = subscriptions
                 .partitionsNeedingValidation(time.milliseconds())
                 .stream()
                 .filter(tp -> subscriptions.position(tp) != null)
                 .collect(Collectors.toMap(Function.identity(), subscriptions::position));
 
+        // 这里开始校验偏移量
         validateOffsetsAsync(partitionsToValidate);
     }
 
@@ -781,12 +810,15 @@ public class Fetcher<K, V> implements Closeable {
      * with the epoch less than or equal to the epoch the partition last saw.
      *
      * Requests are grouped by Node for efficiency.
+     * 校验这组偏移量
      */
     private void validateOffsetsAsync(Map<TopicPartition, FetchPosition> partitionsToValidate) {
+        // 按照tp.leader所在的node进一步分组
         final Map<Node, Map<TopicPartition, FetchPosition>> regrouped =
             regroupFetchPositionsByLeader(partitionsToValidate);
 
         long nextResetTimeMs = time.milliseconds() + requestTimeoutMs;
+        // 针对每个leader发送校验偏移量请求
         regrouped.forEach((node, fetchPositions) -> {
             if (node.isEmpty()) {
                 metadata.requestUpdate();
@@ -803,22 +835,32 @@ public class Fetcher<K, V> implements Closeable {
                 log.debug("Skipping validation of fetch offsets for partitions {} since the broker does not " +
                               "support the required protocol version (introduced in Kafka 2.3)",
                     fetchPositions.keySet());
+                // 切换成fetching 代表可以开始拉取数据了
                 for (TopicPartition partition : fetchPositions.keySet()) {
                     subscriptions.completeValidation(partition);
                 }
                 return;
             }
 
+            // 提前设置下一次的重试时间
             subscriptions.setNextAllowedRetry(fetchPositions.keySet(), nextResetTimeMs);
 
+            // 针对这些偏移量发送异步请求
             RequestFuture<OffsetForEpochResult> future =
                 offsetsForLeaderEpochClient.sendAsyncRequest(node, fetchPositions);
 
+            // 设置校验结果监听器
             future.addListener(new RequestFutureListener<OffsetForEpochResult>() {
+
+                /**
+                 * 在结果中部分处理成功 部分需要重试
+                 * @param offsetsResult
+                 */
                 @Override
                 public void onSuccess(OffsetForEpochResult offsetsResult) {
                     List<SubscriptionState.LogTruncation> truncations = new ArrayList<>();
                     if (!offsetsResult.partitionsToRetry().isEmpty()) {
+                        // 本次获取失败 在重试时间上增加一个补偿时间
                         subscriptions.setNextAllowedRetry(offsetsResult.partitionsToRetry(), time.milliseconds() + retryBackoffMs);
                         metadata.requestUpdate();
                     }
@@ -829,8 +871,11 @@ public class Fetcher<K, V> implements Closeable {
                     //
                     // In addition, check whether the returned offset and epoch are valid. If not, then we should reset
                     // its offset if reset policy is configured, or throw out of range exception.
+                    // 这里存储的是该tp此时最新的偏移量
                     offsetsResult.endOffsets().forEach((topicPartition, respEndOffset) -> {
                         FetchPosition requestPosition = fetchPositions.get(topicPartition);
+
+                        // 根据最新的偏移量校验本地偏移量
                         Optional<SubscriptionState.LogTruncation> truncationOpt =
                             subscriptions.maybeCompleteValidation(topicPartition, requestPosition, respEndOffset);
                         truncationOpt.ifPresent(truncations::add);
@@ -1132,11 +1177,14 @@ public class Fetcher<K, V> implements Closeable {
     /**
      * If we have seen new metadata (as tracked by {@link org.apache.kafka.clients.Metadata#updateVersion()}), then
      * we should check that all of the assignments have a valid position.
+     * 将某些fetchState更新成待校验
      */
     private void validatePositionsOnMetadataChange() {
         int newMetadataUpdateVersion = metadata.updateVersion();
+        // 与之前缓存的不同 代表发生了变化
         if (metadataUpdateVersion.getAndSet(newMetadataUpdateVersion) != newMetadataUpdateVersion) {
             subscriptions.assignedPartitions().forEach(topicPartition -> {
+                // 找到每个tp此时对应的leader节点信息
                 ConsumerMetadata.LeaderAndEpoch leaderAndEpoch = metadata.currentLeader(topicPartition);
                 subscriptions.maybeValidatePositionForCurrentLeader(apiVersions, topicPartition, leaderAndEpoch);
             });
@@ -1207,6 +1255,11 @@ public class Fetcher<K, V> implements Closeable {
         return reqs;
     }
 
+    /**
+     * 将偏移量按照tp所在的leader进行分组
+     * @param partitionMap
+     * @return
+     */
     private Map<Node, Map<TopicPartition, FetchPosition>> regroupFetchPositionsByLeader(
             Map<TopicPartition, FetchPosition> partitionMap) {
         return partitionMap.entrySet()
@@ -1403,8 +1456,10 @@ public class Fetcher<K, V> implements Closeable {
      * Clear the buffered data which are not a part of newly assigned partitions
      *
      * @param assignedPartitions  newly assigned {@link TopicPartition}
+     *                            TODO
      */
     public void clearBufferedDataForUnassignedPartitions(Collection<TopicPartition> assignedPartitions) {
+
         Iterator<CompletedFetch> completedFetchesItr = completedFetches.iterator();
         while (completedFetchesItr.hasNext()) {
             CompletedFetch records = completedFetchesItr.next();
@@ -1425,14 +1480,17 @@ public class Fetcher<K, V> implements Closeable {
      * Clear the buffered data which are not a part of newly assigned topics
      *
      * @param assignedTopics  newly assigned topics
+     *                        更新此时订阅的所有topic
      */
     public void clearBufferedDataForUnassignedTopics(Collection<String> assignedTopics) {
         Set<TopicPartition> currentTopicPartitions = new HashSet<>();
         for (TopicPartition tp : subscriptions.assignedPartitions()) {
+            // 如果存在相同的topic 这些tp信息可以保留 因为每次订阅新的topic 还需要看具体分配到的是哪几个分区
             if (assignedTopics.contains(tp.topic())) {
                 currentTopicPartitions.add(tp);
             }
         }
+        // 清理其他tp 仅保留这些
         clearBufferedDataForUnassignedPartitions(currentTopicPartitions);
     }
 

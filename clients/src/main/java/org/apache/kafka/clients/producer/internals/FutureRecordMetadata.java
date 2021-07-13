@@ -26,9 +26,14 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The future result of a record send
+ * 针对单个record 管理获取发送结果 batch会管理thunk 而thunk内部包含该对象
+ * producer调用send后 得到的就是这个对象
  */
 public final class FutureRecordMetadata implements Future<RecordMetadata> {
 
+    /**
+     * 本对象负责阻塞一个batch对象
+     */
     private final ProduceRequestResult result;
     private final long relativeOffset;
     private final long createTimestamp;
@@ -36,8 +41,22 @@ public final class FutureRecordMetadata implements Future<RecordMetadata> {
     private final int serializedKeySize;
     private final int serializedValueSize;
     private final Time time;
+
+    /**
+     * 可以将多个等待发送结果的对象组合成链式结构  在调用get时 只有这组消息都发送成功时 才会从阻塞状态解除
+     */
     private volatile FutureRecordMetadata nextRecordMetadata = null;
 
+    /**
+     *
+     * @param result
+     * @param relativeOffset 这个偏移量是代表本record对应batch中的第几个
+     * @param createTimestamp
+     * @param checksum
+     * @param serializedKeySize
+     * @param serializedValueSize
+     * @param time
+     */
     public FutureRecordMetadata(ProduceRequestResult result, long relativeOffset, long createTimestamp,
                                 Long checksum, int serializedKeySize, int serializedValueSize, Time time) {
         this.result = result;
@@ -59,9 +78,16 @@ public final class FutureRecordMetadata implements Future<RecordMetadata> {
         return false;
     }
 
+    /**
+     * 可以看到针对某个record的get 会由同一个result对象进行阻塞  而result与batch是一一对应的
+     * @return
+     * @throws InterruptedException
+     * @throws ExecutionException
+     */
     @Override
     public RecordMetadata get() throws InterruptedException, ExecutionException {
         this.result.await();
+        // 如果本对象已经构建成链式结构后 一旦本对象从阻塞状态唤醒 就会立即调用下一个对象的get
         if (nextRecordMetadata != null)
             return nextRecordMetadata.get();
         return valueOrError();
@@ -104,7 +130,12 @@ public final class FutureRecordMetadata implements Future<RecordMetadata> {
         return this.checksum;
     }
 
+    /**
+     * 将本消息的相关信息返回
+     * @return
+     */
     RecordMetadata value() {
+        // 如果是链式结构 则返回链尾的记录
         if (nextRecordMetadata != null)
             return nextRecordMetadata.value();
         return new RecordMetadata(result.topicPartition(), this.result.baseOffset(), this.relativeOffset,

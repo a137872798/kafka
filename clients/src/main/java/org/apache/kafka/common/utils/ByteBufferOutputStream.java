@@ -31,6 +31,7 @@ import java.nio.ByteBuffer;
  * Hard to track bugs can happen when this class is used for the second reason and unexpected buffer expansion happens.
  * So, it's best to assume that buffer expansion can always happen. An improvement would be to create a separate class
  * that throws an error if buffer expansion is required to avoid the issue altogether.
+ * 在buffer的基础上增加了自动扩容功能
  */
 public class ByteBufferOutputStream extends OutputStream {
 
@@ -117,6 +118,10 @@ public class ByteBufferOutputStream extends OutputStream {
             expandBuffer(remainingBytesRequired);
     }
 
+    /**
+     * 在执行写入操作时 进行内存检查 当内存不足时 自动扩容
+     * @param remainingRequired
+     */
     private void expandBuffer(int remainingRequired) {
         int expandSize = Math.max((int) (buffer.limit() * REALLOCATION_FACTOR), buffer.position() + remainingRequired);
         ByteBuffer temp = ByteBuffer.allocate(expandSize);

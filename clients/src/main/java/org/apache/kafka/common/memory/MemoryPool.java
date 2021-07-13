@@ -22,8 +22,13 @@ import java.nio.ByteBuffer;
 /**
  * A common memory pool interface for non-blocking pools.
  * Every buffer returned from {@link #tryAllocate(int)} must always be {@link #release(ByteBuffer) released}.
+ * 内存池  网络模块的内存分配都是通过该对象
  */
 public interface MemoryPool {
+
+    /**
+     * 空的内存池 每次都是分配新内存
+     */
     MemoryPool NONE = new MemoryPool() {
         @Override
         public ByteBuffer tryAllocate(int sizeBytes) {

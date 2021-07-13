@@ -178,6 +178,10 @@ public class Metadata implements Closeable {
         return this.updateVersion;
     }
 
+    /**
+     * 由于产生了新的topic 所以要将元数据信息同步都server
+     * @return
+     */
     public synchronized int requestUpdateForNewTopics() {
         // Override the timestamp of last refresh to let immediate update.
         this.lastRefreshMs = 0;
@@ -249,6 +253,11 @@ public class Metadata implements Closeable {
         }
     }
 
+    /**
+     * 找到当前tp对应的leader节点  同一个tp可以做主从 写入只能针对leader节点
+     * @param topicPartition
+     * @return
+     */
     public synchronized LeaderAndEpoch currentLeader(TopicPartition topicPartition) {
         Optional<MetadataResponse.PartitionMetadata> maybeMetadata = partitionMetadataIfCurrent(topicPartition);
         if (!maybeMetadata.isPresent())
@@ -260,7 +269,12 @@ public class Metadata implements Closeable {
         return new LeaderAndEpoch(leaderNodeOpt, leaderEpochOpt);
     }
 
+    /**
+     * 当传入了一个初始的服务器地址后 就会启动元数据的自动更新
+     * @param addresses
+     */
     public synchronized void bootstrap(List<InetSocketAddress> addresses) {
+        // 首次要求获取全量数据
         this.needFullUpdate = true;
         this.updateVersion += 1;
         this.cache = MetadataCache.bootstrap(addresses);

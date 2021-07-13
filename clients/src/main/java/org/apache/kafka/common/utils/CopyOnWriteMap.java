@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /**
  * A simple read-optimized map implementation that synchronizes only writes and does a full copy on each modification
+ * 利用 CopyOnWrite机制实现线程安全
  */
 public class CopyOnWriteMap<K, V> implements ConcurrentMap<K, V> {
 

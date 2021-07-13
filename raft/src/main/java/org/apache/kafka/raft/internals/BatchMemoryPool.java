@@ -25,13 +25,23 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Simple memory pool which maintains a limited number of fixed-size buffers.
+ * 通过lock+队列的形式实现内存池
  */
 public class BatchMemoryPool implements MemoryPool {
     private final ReentrantLock lock;
     private final Deque<ByteBuffer> free;
+    /**
+     * 允许存储多少个buffer
+     */
     private final int maxBatches;
+    /**
+     * 每次分配的buffer大小是固定的
+     */
     private final int batchSize;
 
+    /**
+     * 此时分配的buffer数量
+     */
     private int numAllocatedBatches = 0;
 
     public BatchMemoryPool(int maxBatches, int batchSize) {

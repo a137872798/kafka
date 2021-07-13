@@ -26,6 +26,7 @@ import java.util.Set;
 /**
  * A provider of configuration data, which may optionally support subscriptions to configuration changes.
  * Implementations are required to safely support concurrent calls to any of the methods in this interface.
+ * 可以提供某个配置项
  */
 public interface ConfigProvider extends Configurable, Closeable {
 

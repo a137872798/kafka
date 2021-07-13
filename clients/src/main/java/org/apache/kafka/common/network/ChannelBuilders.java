@@ -109,6 +109,23 @@ public class ChannelBuilders {
                 tokenCache, time, logContext, apiVersionSupplier);
     }
 
+    /**
+     * 先只关注明文channelBuilder
+     * @param securityProtocol
+     * @param mode
+     * @param contextType
+     * @param config
+     * @param listenerName
+     * @param isInterBrokerListener
+     * @param clientSaslMechanism
+     * @param saslHandshakeRequestEnable
+     * @param credentialCache
+     * @param tokenCache
+     * @param time
+     * @param logContext
+     * @param apiVersionSupplier
+     * @return
+     */
     private static ChannelBuilder create(SecurityProtocol securityProtocol,
                                          Mode mode,
                                          JaasContext.Type contextType,

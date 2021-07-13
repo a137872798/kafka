@@ -43,6 +43,7 @@ import java.util.Objects;
  * A {@link Records} implementation backed by a ByteBuffer. This is used only for reading or
  * modifying in-place an existing buffer of record batches. To create a new buffer see {@link MemoryRecordsBuilder},
  * or one of the {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} variants.
+ * 该对象负责将数据流写入到channel中
  */
 public class MemoryRecords extends AbstractRecords {
     private static final Logger log = LoggerFactory.getLogger(MemoryRecords.class);
@@ -55,6 +56,7 @@ public class MemoryRecords extends AbstractRecords {
     private int validBytes = -1;
 
     // Construct a writable memory records
+    // buffer对应一个batch内的数据
     private MemoryRecords(ByteBuffer buffer) {
         Objects.requireNonNull(buffer, "buffer should not be null");
         this.buffer = buffer;
@@ -427,11 +429,20 @@ public class MemoryRecords extends AbstractRecords {
                 RecordBatch.NO_PARTITION_LEADER_EPOCH);
     }
 
+    /**
+     * @param buffer
+     * @param magic
+     * @param compressionType
+     * @param timestampType
+     * @param baseOffset
+     * @return
+     */
     public static MemoryRecordsBuilder builder(ByteBuffer buffer,
                                                byte magic,
                                                CompressionType compressionType,
                                                TimestampType timestampType,
                                                long baseOffset) {
+        // 根据情况生成消息追加成功的时间戳
         long logAppendTime = RecordBatch.NO_TIMESTAMP;
         if (timestampType == TimestampType.LOG_APPEND_TIME)
             logAppendTime = System.currentTimeMillis();

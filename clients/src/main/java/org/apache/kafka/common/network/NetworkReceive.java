@@ -27,6 +27,7 @@ import java.nio.channels.ScatteringByteChannel;
 
 /**
  * A size delimited Receive that consists of a 4 byte network-ordered size N followed by N bytes of content
+ * 从对端接收到的数据流会被包装成该对象
  */
 public class NetworkReceive implements Receive {
 
@@ -39,6 +40,7 @@ public class NetworkReceive implements Receive {
     private final ByteBuffer size;
     private final int maxSize;
     private final MemoryPool memoryPool;
+    // 本次消息体的总大小
     private int requestedBufferSize = -1;
     private ByteBuffer buffer;
 
@@ -89,13 +91,21 @@ public class NetworkReceive implements Receive {
         return !size.hasRemaining() && buffer != null && !buffer.hasRemaining();
     }
 
+    /**
+     * 从nioChannel中读取数据  本次不一定能读取到一个完整的数据包
+     * @param channel The channel to read from
+     * @return
+     * @throws IOException
+     */
     public long readFrom(ScatteringByteChannel channel) throws IOException {
         int read = 0;
+        // size固定用来读取长度信息
         if (size.hasRemaining()) {
             int bytesRead = channel.read(size);
             if (bytesRead < 0)
                 throw new EOFException();
             read += bytesRead;
+            // 检验长度的有效性
             if (!size.hasRemaining()) {
                 size.rewind();
                 int receiveSize = size.getInt();

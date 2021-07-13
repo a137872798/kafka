@@ -91,6 +91,7 @@ final class InFlightRequests {
      * Complete the last request that was sent to a particular node.
      * @param node The node the request was sent to
      * @return The request
+     * 标记某个请求已经收到结果
      */
     public NetworkClient.InFlightRequest completeLastSent(String node) {
         NetworkClient.InFlightRequest inFlightRequest = requestQueue(node).pollFirst();
@@ -152,6 +153,7 @@ final class InFlightRequests {
      *
      * @param node The node
      * @return All the in-flight requests for that node that have been removed
+     * 将发往某个node的所有请求从requests中移除 并返回
      */
     public Iterable<NetworkClient.InFlightRequest> clearAll(String node) {
         Deque<NetworkClient.InFlightRequest> reqs = requests.get(node);
@@ -178,6 +180,7 @@ final class InFlightRequests {
      *
      * @param now current time in milliseconds
      * @return list of nodes
+     * 返回所有超时req对应的nodeid
      */
     public List<String> nodesWithTimedOutRequests(long now) {
         List<String> nodeIds = new ArrayList<>();

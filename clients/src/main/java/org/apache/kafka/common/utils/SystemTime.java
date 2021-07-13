@@ -23,6 +23,7 @@ import java.util.function.Supplier;
 /**
  * A time implementation that uses the system clock and sleep call. Use `Time.SYSTEM` instead of creating an instance
  * of this class.
+ * time对象的默认实现 都是通过调用系统函数 并且没有缓存时间
  */
 public class SystemTime implements Time {
 
@@ -41,6 +42,15 @@ public class SystemTime implements Time {
         Utils.sleep(ms);
     }
 
+    /**
+     * 等待deadlineMs时间后检测条件是否符合 当超过deadlineMs时 抛出异常
+     * @param obj The object that will be waited with {@link Object#wait()}. Note that it is the responsibility
+     *      of the caller to call notify on this object when the condition is satisfied.
+     * @param condition The condition we are awaiting
+     * @param deadlineMs The deadline timestamp at which to raise a timeout error
+     *
+     * @throws InterruptedException
+     */
     @Override
     public void waitObject(Object obj, Supplier<Boolean> condition, long deadlineMs) throws InterruptedException {
         synchronized (obj) {

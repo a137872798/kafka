@@ -150,6 +150,10 @@ public class KafkaChannel implements AutoCloseable {
         this.state = ChannelState.NOT_CONNECTED;
     }
 
+    /**
+     * 关闭底层channel
+     * @throws IOException
+     */
     public void close() throws IOException {
         this.disconnected = true;
         Utils.closeAll(transportLayer, authenticator, receive, metadataRegistry);
@@ -218,6 +222,11 @@ public class KafkaChannel implements AutoCloseable {
         return this.state;
     }
 
+    /**
+     * 完成3次握手
+     * @return
+     * @throws IOException
+     */
     public boolean finishConnect() throws IOException {
         //we need to grab remoteAddr before finishConnect() is called otherwise
         //it becomes inaccessible if the connection was refused.
@@ -226,9 +235,13 @@ public class KafkaChannel implements AutoCloseable {
             remoteAddress = socketChannel.getRemoteAddress();
         }
         boolean connected = transportLayer.finishConnect();
+
+        // 代表本次连接完成
         if (connected) {
+            // 如果不需要什么认证措施 可以将channel标记成ready
             if (ready()) {
                 state = ChannelState.READY;
+                // TODO 忽略认证的
             } else if (remoteAddress != null) {
                 state = new ChannelState(ChannelState.State.AUTHENTICATE, remoteAddress.toString());
             } else {
@@ -252,9 +265,11 @@ public class KafkaChannel implements AutoCloseable {
 
     /**
      * externally muting a channel should be done via selector to ensure proper state handling
+     * 因为此时内存不足无法分配buffer 所以要将自身暂停
      */
     void mute() {
         if (muteState == ChannelMuteState.NOT_MUTED) {
+            // 此时就不需要监听read事件了 反正没有空间存储
             if (!disconnected) transportLayer.removeInterestOps(SelectionKey.OP_READ);
             muteState = ChannelMuteState.MUTED;
         }
@@ -265,9 +280,11 @@ public class KafkaChannel implements AutoCloseable {
      * (MUTED_AND_*), this is a no-op.
      *
      * @return Whether or not the channel is in the NOT_MUTED state after the call
+     * 此时pool中有内存可以分配buffer了 将该channel从沉默状态解除
      */
     boolean maybeUnmute() {
         if (muteState == ChannelMuteState.MUTED) {
+            // 重新注册read事件
             if (!disconnected) transportLayer.addInterestOps(SelectionKey.OP_READ);
             muteState = ChannelMuteState.NOT_MUTED;
         }
@@ -393,6 +410,10 @@ public class KafkaChannel implements AutoCloseable {
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
+    /**
+     * 一旦开始写入 midWrite就会被标记成true 而当整个写入完成时 就会将midWrite标记成false
+     * @return
+     */
     public NetworkSend maybeCompleteSend() {
         if (send != null && send.completed()) {
             midWrite = false;
@@ -410,12 +431,15 @@ public class KafkaChannel implements AutoCloseable {
      * @throws IOException
      */
     public long read() throws IOException {
+        // 如果receive对象还未创建 先初始化
         if (receive == null) {
             receive = new NetworkReceive(maxReceiveSize, id, memoryPool);
         }
 
         long bytesReceived = receive(this.receive);
 
+        // 每当读取一部分数据后就要检测是否要将自身沉默  比如此时pool无法分配缓冲区去存储接收到的数据 那么可以暂时沉默自身
+        // 同时也代表本次receive分配buffer失败
         if (this.receive.requiredMemoryAmountKnown() && !this.receive.memoryAllocated() && isInMutableState()) {
             //pool must be out of memory, mute ourselves.
             mute();
@@ -427,6 +451,9 @@ public class KafkaChannel implements AutoCloseable {
         return receive;
     }
 
+    /**
+     * 检测本次的数据包是否完整 完整的话将receive返回  同时置空引用
+     */
     public NetworkReceive maybeCompleteReceive() {
         if (receive != null && receive.complete()) {
             receive.payload().rewind();
@@ -462,6 +489,12 @@ public class KafkaChannel implements AutoCloseable {
         return current;
     }
 
+    /**
+     * 调用socket函数将数据读取到receive中
+     * @param receive
+     * @return
+     * @throws IOException
+     */
     private long receive(NetworkReceive receive) throws IOException {
         try {
             return receive.readFrom(transportLayer);

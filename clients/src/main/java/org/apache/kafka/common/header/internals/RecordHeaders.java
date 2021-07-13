@@ -27,6 +27,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * 内部包含一组消息头
+ */
 public class RecordHeaders implements Headers {
 
     private final List<Header> headers;

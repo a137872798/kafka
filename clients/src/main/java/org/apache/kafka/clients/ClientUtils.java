@@ -85,6 +85,7 @@ public final class ClientUtils {
                 }
             }
         }
+        // 必须要求设置初始服务器地址 否则无法更新元数据
         if (addresses.isEmpty())
             throw new ConfigException("No resolvable bootstrap urls given in " + CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG);
         return addresses;
@@ -98,8 +99,10 @@ public final class ClientUtils {
      * @param logContext the logging context
      *
      * @return configured ChannelBuilder based on the configs.
+     * 之后会使用该对象来封装nioChannel
      */
     public static ChannelBuilder createChannelBuilder(AbstractConfig config, Time time, LogContext logContext) {
+        // 检测使用的安全协议
         SecurityProtocol securityProtocol = SecurityProtocol.forName(config.getString(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));
         String clientSaslMechanism = config.getString(SaslConfigs.SASL_MECHANISM);
         return ChannelBuilders.clientChannelBuilder(securityProtocol, JaasContext.Type.CLIENT, config, null,

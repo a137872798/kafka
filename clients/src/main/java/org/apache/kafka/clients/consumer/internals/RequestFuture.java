@@ -43,22 +43,40 @@ import java.util.concurrent.atomic.AtomicReference;
  * </pre>
  *
  * @param <T> Return type of the result (Can be Void if there is no response)
+ *           PollCondition包含一个是否应该继续阻塞的api
  */
 public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
 
     private static final Object INCOMPLETE_SENTINEL = new Object();
+    /**
+     * 使用该对象存储future的结果
+     */
     private final AtomicReference<Object> result = new AtomicReference<>(INCOMPLETE_SENTINEL);
+    /**
+     * 存储一组处理结果的监听器
+     */
     private final ConcurrentLinkedQueue<RequestFutureListener<T>> listeners = new ConcurrentLinkedQueue<>();
+    /**
+     * 在未设置结果或者exception之前 尝试获取结果的线程都会被本对象阻塞
+     */
     private final CountDownLatch completedLatch = new CountDownLatch(1);
 
     /**
      * Check whether the response is ready to be handled
      * @return true if the response is ready, false otherwise
+     * 当获得结果后 会覆盖原来的INCOMPLETE_SENTINEL
      */
     public boolean isDone() {
         return result.get() != INCOMPLETE_SENTINEL;
     }
 
+    /**
+     * 通过闭锁实现线程等待
+     * @param timeout
+     * @param unit
+     * @return
+     * @throws InterruptedException
+     */
     public boolean awaitDone(long timeout, TimeUnit unit) throws InterruptedException {
         return completedLatch.await(timeout, unit);
     }
@@ -86,6 +104,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
     /**
      * Check if the request failed.
      * @return true if the request completed with a failure
+     * 当出现异常时 也是设置到result字段中
      */
     public boolean failed() {
         return result.get() instanceof RuntimeException;
@@ -96,6 +115,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * the exception is an instance of {@link RetriableException}.
      * @return true if it is retriable, false otherwise
      * @throws IllegalStateException if the future is not complete or completed successfully
+     * 查看异常是否是可重试的
      */
     public boolean isRetriable() {
         return exception() instanceof RetriableException;
@@ -118,6 +138,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * @param value corresponding value (or null if there is none)
      * @throws IllegalStateException if the future has already been completed
      * @throws IllegalArgumentException if the argument is an instance of {@link RuntimeException}
+     * 设置future的结果
      */
     public void complete(T value) {
         try {
@@ -137,6 +158,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * handle the exception or throw it.
      * @param e corresponding exception to be passed to caller
      * @throws IllegalStateException if the future has already been completed
+     * 本次结果得到异常信息
      */
     public void raise(RuntimeException e) {
         try {
@@ -160,6 +182,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
         raise(error.exception());
     }
 
+    /**
+     * future成功得到结果 触发所有监听器
+     */
     private void fireSuccess() {
         T value = value();
         while (true) {
@@ -170,6 +195,9 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
         }
     }
 
+    /**
+     * 本次处理失败 触发所有监听器
+     */
     private void fireFailure() {
         RuntimeException exception = exception();
         while (true) {
@@ -197,6 +225,7 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
      * @param adapter The adapter which does the conversion
      * @param <S> The type of the future adapted to
      * @return The new future
+     * 基于某个监听器对象 生成一个requestFuture
      */
     public <S> RequestFuture<S> compose(final RequestFutureAdapter<T, S> adapter) {
         final RequestFuture<S> adapted = new RequestFuture<>();
@@ -214,6 +243,10 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
         return adapted;
     }
 
+    /**
+     * 当本对象产生结果时 会传播到下面的future
+     * @param future
+     */
     public void chain(final RequestFuture<T> future) {
         addListener(new RequestFutureListener<T>() {
             @Override
@@ -234,12 +267,21 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
         return future;
     }
 
+    /**
+     * 本次只是表示成功 但是没有实际结果
+     * @return
+     */
     public static RequestFuture<Void> voidSuccess() {
         RequestFuture<Void> future = new RequestFuture<>();
         future.complete(null);
         return future;
     }
 
+    /**
+     * 下面是几个特殊的异常
+     * @param <T>
+     * @return
+     */
     public static <T> RequestFuture<T> coordinatorNotAvailable() {
         return failure(Errors.COORDINATOR_NOT_AVAILABLE.exception());
     }
@@ -248,6 +290,10 @@ public class RequestFuture<T> implements ConsumerNetworkClient.PollCondition {
         return failure(new NoAvailableBrokersException());
     }
 
+    /**
+     * 只要结果还未设置 就代表还需要继续等待
+     * @return
+     */
     @Override
     public boolean shouldBlock() {
         return !isDone();

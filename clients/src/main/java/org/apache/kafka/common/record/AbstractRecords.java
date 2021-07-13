@@ -131,6 +131,7 @@ public abstract class AbstractRecords implements Records {
      */
     public static int estimateSizeInBytesUpperBound(byte magic, CompressionType compressionType, ByteBuffer key,
                                                     ByteBuffer value, Header[] headers) {
+        // 目前版本是2 只看这个分支
         if (magic >= RecordBatch.MAGIC_VALUE_V2)
             return DefaultRecordBatch.estimateBatchSizeUpperBound(key, value, headers);
         else if (compressionType != CompressionType.NONE)

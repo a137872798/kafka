@@ -149,6 +149,9 @@ public class ProduceResponse extends AbstractResponse {
         return errorCounts;
     }
 
+    /**
+     * 代表某个分区的推送结果
+     */
     public static final class PartitionResponse {
         public Errors error;
         public long baseOffset;

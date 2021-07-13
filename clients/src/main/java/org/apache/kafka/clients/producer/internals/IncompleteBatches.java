@@ -23,6 +23,7 @@ import java.util.Set;
 /*
  * A thread-safe helper class to hold batches that haven't been acknowledged yet (including those
  * which have and have not been sent).
+ * 管理所有未写入到网络缓冲区的batch
  */
 class IncompleteBatches {
     private final Set<ProducerBatch> incomplete;

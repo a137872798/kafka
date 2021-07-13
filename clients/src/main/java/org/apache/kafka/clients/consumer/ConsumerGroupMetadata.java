@@ -24,6 +24,7 @@ import java.util.Optional;
 /**
  * A metadata struct containing the consumer group information.
  * Note: Any change to this class is considered public and requires a KIP.
+ * 消费者组元数据
  */
 public class ConsumerGroupMetadata {
     final private String groupId;
@@ -31,6 +32,13 @@ public class ConsumerGroupMetadata {
     final private String memberId;
     final private Optional<String> groupInstanceId;
 
+    /**
+     * 初始阶段可能generationId/memberId 都是默认值 因为此时还不知道group内有多少消费者
+     * @param groupId
+     * @param generationId
+     * @param memberId
+     * @param groupInstanceId
+     */
     public ConsumerGroupMetadata(String groupId,
                                  int generationId,
                                  String memberId,

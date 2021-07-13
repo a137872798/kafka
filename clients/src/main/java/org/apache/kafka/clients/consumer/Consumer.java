@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
+ * 作为kafka消费者 定义了相关的api
  * @see KafkaConsumer
  * @see MockConsumer
  */

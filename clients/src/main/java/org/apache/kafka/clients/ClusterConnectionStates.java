@@ -110,6 +110,7 @@ final class ClusterConnectionStates {
      * connections.
      * @param id the connection to check
      * @param now the current time in ms
+     *            返回重连的剩余补偿时间
      */
     public long connectionDelay(String id, long now) {
         NodeConnectionState state = nodeState.get(id);
@@ -120,6 +121,7 @@ final class ClusterConnectionStates {
         } else {
             // When connecting or connected, we should be able to delay indefinitely since other events (connection or
             // data acked) will cause a wakeup once data can be sent.
+            // 如果已经建立连接了 或者正在连接中 返回特殊值
             return Long.MAX_VALUE;
         }
     }
@@ -192,16 +194,21 @@ final class ClusterConnectionStates {
      * Enter the disconnected state for the given node.
      * @param id the connection we have disconnected
      * @param now the current time in ms
+     *            将连接状态修改成断开连接
      */
     public void disconnected(String id, long now) {
         NodeConnectionState nodeState = nodeState(id);
         nodeState.lastConnectAttemptMs = now;
+        // 更新重连的补偿时间 在这段时间内不允许对该节点发起重连
         updateReconnectBackoff(nodeState);
+        // 如果该连接是在还未完全建立时断开的 要生成另一个补偿时间
         if (nodeState.state == ConnectionState.CONNECTING) {
             updateConnectionSetupTimeout(nodeState);
             connectingNodes.remove(id);
         } else {
+            // 重置有关connecting时 断开连接的相关信息
             resetConnectionSetupTimeout(nodeState);
+            // 如果连接之前已经完成 清理当前地址信息
             if (nodeState.state.isConnected()) {
                 // If a connection had previously been established, clear the addresses to trigger a new DNS resolution
                 // because the node IPs may have changed
@@ -228,6 +235,7 @@ final class ClusterConnectionStates {
      * Return the remaining throttling delay in milliseconds if throttling is in progress. Return 0, otherwise.
      * @param id the connection to check
      * @param now the current time in ms
+     *            距离解除限流还有多久
      */
     public long throttleDelayMs(String id, long now) {
         NodeConnectionState state = nodeState.get(id);
@@ -244,9 +252,11 @@ final class ClusterConnectionStates {
      * Otherwise, return connection delay.
      * @param id the connection to check
      * @param now the current time in ms
+     *            还要多久才能向该节点拉取数据
      */
     public long pollDelayMs(String id, long now) {
         long throttleDelayMs = throttleDelayMs(id, now);
+        // 如果是连接状态返回限流时间 如果还未连接返回距离重连的等待时间
         if (isConnected(id) && throttleDelayMs > 0) {
             return throttleDelayMs;
         } else {
@@ -257,6 +267,7 @@ final class ClusterConnectionStates {
     /**
      * Enter the checking_api_versions state for the given node.
      * @param id the connection identifier
+     *           将节点标记成正在检测兼容性
      */
     public void checkingApiVersions(String id) {
         NodeConnectionState nodeState = nodeState(id);
@@ -269,6 +280,7 @@ final class ClusterConnectionStates {
     /**
      * Enter the ready state for the given node.
      * @param id the connection identifier
+     *           将该节点标记成可用状态
      */
     public void ready(String id) {
         NodeConnectionState nodeState = nodeState(id);
@@ -276,6 +288,7 @@ final class ClusterConnectionStates {
         nodeState.authenticationException = null;
         resetReconnectBackoff(nodeState);
         resetConnectionSetupTimeout(nodeState);
+        // 连接已经完成 从相关容器中移除
         connectingNodes.remove(id);
     }
 
@@ -391,6 +404,7 @@ final class ClusterConnectionStates {
      * Up to a (pre-jitter) maximum of reconnect.backoff.max.ms
      *
      * @param nodeState The node state object to update
+     *                  在connecting时断开连接 修改该时间
      */
     private void updateConnectionSetupTimeout(NodeConnectionState nodeState) {
         nodeState.failedConnectAttempts++;
@@ -460,6 +474,7 @@ final class ClusterConnectionStates {
      * Test if the connection to the given node has reached its timeout
      * @param id the connection to fetch the state for
      * @param now the current time in ms
+     *            节点连接超时
      */
     public boolean isConnectionSetupTimeout(String id, long now) {
         NodeConnectionState nodeState = this.nodeState(id);
@@ -471,6 +486,7 @@ final class ClusterConnectionStates {
     /**
      * Return the List of nodes whose connection setup has timed out.
      * @param now the current time in ms
+     *            获取所有超时连接
      */
     public List<String> nodesWithConnectionSetupTimeout(long now) {
         return connectingNodes.stream()

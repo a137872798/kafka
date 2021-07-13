@@ -28,12 +28,19 @@ import org.slf4j.LoggerFactory;
 /**
  * a simple pool implementation. this implementation just provides a limit on the total outstanding memory.
  * any buffer allocated must be release()ed always otherwise memory is not marked as reclaimed (and "leak"s)
+ * 一个简单的内存池对象
  */
 public class SimpleMemoryPool implements MemoryPool {
     protected final Logger log = LoggerFactory.getLogger(getClass()); //subclass-friendly
 
     protected final long sizeBytes;
+    /**
+     * 是否采用严格模式
+     */
     protected final boolean strict;
+    /**
+     * 一开始就规定了池的总大小
+     */
     protected final AtomicLong availableMemory;
     protected final int maxSingleAllocationSize;
     protected final AtomicLong startOfNoMemPeriod = new AtomicLong(); //nanoseconds
@@ -50,6 +57,11 @@ public class SimpleMemoryPool implements MemoryPool {
         this.oomTimeSensor = oomPeriodSensor;
     }
 
+    /**
+     * 尝试分配一个指定大小的内存
+     * @param sizeBytes size required
+     * @return
+     */
     @Override
     public ByteBuffer tryAllocate(int sizeBytes) {
         if (sizeBytes < 1)
@@ -62,6 +74,7 @@ public class SimpleMemoryPool implements MemoryPool {
         //in strict mode we will only allocate memory if we have at least the size required.
         //in non-strict mode we will allocate memory if we have _any_ memory available (so available memory
         //can dip into the negative and max allocated memory would be sizeBytes + maxSingleAllocationSize)
+        // 严格模式下一定会申请等大的内存 非严格模式只要能申请就会尝试
         long threshold = strict ? sizeBytes : 1;
         while ((available = availableMemory.get()) >= threshold) {
             success = availableMemory.compareAndSet(available, available - sizeBytes);
@@ -72,6 +85,7 @@ public class SimpleMemoryPool implements MemoryPool {
         if (success) {
             maybeRecordEndOfDrySpell();
         } else {
+            // 代表没有足够的内存了 返回null
             if (oomTimeSensor != null) {
                 startOfNoMemPeriod.compareAndSet(0, System.nanoTime());
             }
@@ -89,6 +103,7 @@ public class SimpleMemoryPool implements MemoryPool {
         if (previouslyAllocated == null)
             throw new IllegalArgumentException("provided null buffer");
 
+        // 通过releas可以发现实际上内存没有被真正的复用 只是在反复修改availableMemory
         bufferToBeReleased(previouslyAllocated);
         availableMemory.addAndGet(previouslyAllocated.capacity());
         maybeRecordEndOfDrySpell();

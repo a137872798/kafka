@@ -67,6 +67,8 @@ import static org.apache.kafka.common.requests.OffsetsForLeaderEpochResponse.UND
  * assignment is changed whether directly by the user or through a group rebalance.
  *
  * Thread Safety: this class is thread-safe.
+ * 描述消费者的订阅状态
+ * 内部有各种辅助信息
  */
 public class SubscriptionState {
     private static final String SUBSCRIPTION_EXCEPTION_MESSAGE =
@@ -74,6 +76,9 @@ public class SubscriptionState {
 
     private final Logger log;
 
+    /**
+     * 订阅类型 代表基于指定的topic进行订阅 还是正则表达式订阅 还是其他
+     */
     private enum SubscriptionType {
         NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
     }
@@ -84,21 +89,29 @@ public class SubscriptionState {
     /* the pattern user has requested */
     private Pattern subscribedPattern;
 
-    /* the list of topics the user has requested */
+    /* the list of topics the user has requested
+    * 这里存储的只是自动订阅信息 (topic,pattern)
+    * */
     private Set<String> subscription;
 
     /* The list of topics the group has subscribed to. This may include some topics which are not part
      * of `subscription` for the leader of a group since it is responsible for detecting metadata changes
-     * which require a group rebalance. */
+     * which require a group rebalance.
+     * 维护了当前消费者所在group下订阅的所有topic 由所有consumer共同决定
+     * */
     private Set<String> groupSubscription;
 
-    /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details) */
+    /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details)
+    * 该对象存储了本消费者分配到的所有tp
+    * */
     private final PartitionStates<TopicPartitionState> assignment;
 
     /* Default offset reset strategy */
     private final OffsetResetStrategy defaultResetStrategy;
 
-    /* User-provided listener to be invoked when assignment changes */
+    /* User-provided listener to be invoked when assignment changes
+    * 作为消费者 一次只能订阅一组topic 当发起新的订阅请求时 之前的会被覆盖
+    * */
     private ConsumerRebalanceListener rebalanceListener;
 
     private int assignmentId = 0;
@@ -129,13 +142,20 @@ public class SubscriptionState {
         }
     }
 
+    /**
+     * 初始化订阅状态
+     * @param logContext
+     * @param defaultResetStrategy
+     */
     public SubscriptionState(LogContext logContext, OffsetResetStrategy defaultResetStrategy) {
         this.log = logContext.logger(this.getClass());
         this.defaultResetStrategy = defaultResetStrategy;
         this.subscription = new HashSet<>();
+        // 获取分区状态
         this.assignment = new PartitionStates<>();
         this.groupSubscription = new HashSet<>();
         this.subscribedPattern = null;
+        // 订阅类型 topic/pattern
         this.subscriptionType = SubscriptionType.NONE;
     }
 
@@ -162,18 +182,34 @@ public class SubscriptionState {
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
     }
 
+    /**
+     * 开始订阅一组新的topic
+     * @param topics
+     * @param listener
+     * @return
+     */
     public synchronized boolean subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
         registerRebalanceListener(listener);
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
         return changeSubscription(topics);
     }
 
+    /**
+     * 基于正则订阅
+     * @param pattern
+     * @param listener
+     */
     public synchronized void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
         registerRebalanceListener(listener);
         setSubscriptionType(SubscriptionType.AUTO_PATTERN);
         this.subscribedPattern = pattern;
     }
 
+    /**
+     * 先用正则表达式得到匹配的所有topic 然后作为此时订阅的所有topic
+     * @param topics
+     * @return
+     */
     public synchronized boolean subscribeFromPattern(Set<String> topics) {
         if (subscriptionType != SubscriptionType.AUTO_PATTERN)
             throw new IllegalArgumentException("Attempt to subscribe from pattern while subscription type set to " +
@@ -196,11 +232,13 @@ public class SubscriptionState {
      *
      * @param topics All topics from the group subscription
      * @return true if the group subscription contains topics which are not part of the local subscription
+     * 更新当前消费者组订阅的所有topic
      */
     synchronized boolean groupSubscribe(Collection<String> topics) {
         if (!hasAutoAssignedPartitions())
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
         groupSubscription = new HashSet<>(topics);
+        // 组内所有topic是否超过了本consumer订阅的topic范围
         return !subscription.containsAll(groupSubscription);
     }
 
@@ -268,11 +306,14 @@ public class SubscriptionState {
     /**
      * Change the assignment to the specified partitions returned from the coordinator, note this is
      * different from {@link #assignFromUser(Set)} which directly set the assignment from user inputs.
+     * 更新本consumer分配到的所有tp
      */
     public synchronized void assignFromSubscribed(Collection<TopicPartition> assignments) {
+        // 非auto模式 不应当触发该方法 看来只有auto模式才会有join操作和与coordiantor交互的逻辑
         if (!this.hasAutoAssignedPartitions())
             throw new IllegalArgumentException("Attempt to dynamically assign partitions while manual assignment in use");
 
+        // 当assignments为空时 assignedPartitionStates不会填充任何数据
         Map<TopicPartition, TopicPartitionState> assignedPartitionStates = new HashMap<>(assignments.size());
         for (TopicPartition tp : assignments) {
             TopicPartitionState state = this.assignment.stateValue(tp);
@@ -303,6 +344,9 @@ public class SubscriptionState {
         return this.subscriptionType == SubscriptionType.NONE;
     }
 
+    /**
+     * consumer取消订阅 清空相关数据
+     */
     public synchronized void unsubscribe() {
         this.subscription = Collections.emptySet();
         this.groupSubscription = Collections.emptySet();
@@ -324,6 +368,10 @@ public class SubscriptionState {
         return false;
     }
 
+    /**
+     * 获取本消费者所有订阅信息
+     * @return
+     */
     public synchronized Set<String> subscription() {
         if (hasAutoAssignedPartitions())
             return this.subscription;
@@ -408,6 +456,7 @@ public class SubscriptionState {
     }
 
     /**
+     * 返回此时分配在本节点上的tp
      * @return a modifiable copy of the currently assigned partitions as a list
      */
     public synchronized List<TopicPartition> assignedPartitionsList() {
@@ -435,6 +484,10 @@ public class SubscriptionState {
         return result;
     }
 
+    /**
+     * 是否开启了自动订阅方式
+     * @return
+     */
     public synchronized boolean hasAutoAssignedPartitions() {
         return this.subscriptionType == SubscriptionType.AUTO_TOPICS || this.subscriptionType == SubscriptionType.AUTO_PATTERN;
     }
@@ -449,8 +502,8 @@ public class SubscriptionState {
      *
      * @param apiVersions supported API versions
      * @param tp topic partition to validate
-     * @param leaderAndEpoch leader epoch of the topic partition
-     * @return true if we enter the offset validation state
+     * @param leaderAndEpoch leader epoch of the topic partition  本次检测的tp
+     * @return true if we enter the offset validation state   对应的leader节点
      */
     public synchronized boolean maybeValidatePositionForCurrentLeader(ApiVersions apiVersions,
                                                                       TopicPartition tp,
@@ -461,6 +514,7 @@ public class SubscriptionState {
                 return assignedState(tp).maybeValidatePosition(leaderAndEpoch);
             } else {
                 // If the broker does not support a newer version of OffsetsForLeaderEpoch, we skip validation
+                // TODO
                 assignedState(tp).updatePositionLeaderNoValidation(leaderAndEpoch);
                 return false;
             }
@@ -600,9 +654,14 @@ public class SubscriptionState {
         return assignedState(tp).clearPreferredReadReplica();
     }
 
+    /**
+     * 获取本消费者分配到的所有tp此时的偏移量  包含最新消费到的
+     * @return
+     */
     public synchronized Map<TopicPartition, OffsetAndMetadata> allConsumed() {
         Map<TopicPartition, OffsetAndMetadata> allConsumed = new HashMap<>();
         assignment.forEach((topicPartition, partitionState) -> {
+            // 如果此时有关该tp的偏移量是有效的 需要同步给coordinator 而在join阶段tp信息都还没获取到 就不需要同步了
             if (partitionState.hasValidPosition())
                 allConsumed.put(topicPartition, new OffsetAndMetadata(partitionState.position.offset,
                         partitionState.position.offsetEpoch, ""));
@@ -737,8 +796,14 @@ public class SubscriptionState {
         return rebalanceListener;
     }
 
+    /**
+     * 存储了此时分配到本消费者的某个tp的全部相关数据
+     */
     private static class TopicPartitionState {
 
+        /**
+         * 当初始化分配的分区时 拉取状态为init 此时还不知道该tp对应的偏移量
+         */
         private FetchState fetchState;
         private FetchPosition position; // last consumed position
 
@@ -816,17 +881,21 @@ public class SubscriptionState {
          *
          * @param currentLeaderAndEpoch leader and epoch to compare the offset with
          * @return true if the position is now awaiting validation
+         * 将某些fetchState修改成待校验
          */
         private boolean maybeValidatePosition(Metadata.LeaderAndEpoch currentLeaderAndEpoch) {
             if (this.fetchState.equals(FetchStates.AWAIT_RESET)) {
                 return false;
             }
 
+            // 此时没有leader信息无法校验
             if (!currentLeaderAndEpoch.leader.isPresent()) {
                 return false;
             }
 
+            // TODO 先忽略
             if (position != null && !position.currentLeader.equals(currentLeaderAndEpoch)) {
+                // 生成新的position对象 并进行检测
                 FetchPosition newPosition = new FetchPosition(position.offset, position.offsetEpoch, currentLeaderAndEpoch);
                 validatePosition(newPosition);
                 preferredReadReplica = null;
@@ -846,6 +915,10 @@ public class SubscriptionState {
             }
         }
 
+        /**
+         * 对某个position对象进行校验
+         * @param position
+         */
         private void validatePosition(FetchPosition position) {
             if (position.offsetEpoch.isPresent() && position.currentLeader.epoch.isPresent()) {
                 transitionState(FetchStates.AWAIT_VALIDATION, () -> {
@@ -961,9 +1034,11 @@ public class SubscriptionState {
     /**
      * The fetch state of a partition. This class is used to determine valid state transitions and expose the some of
      * the behavior of the current fetch state. Actual state variables are stored in the {@link TopicPartitionState}.
+     * 描述针对某个分区的数据拉取状态
      */
     interface FetchState {
         default FetchState transitionTo(FetchState newState) {
+            // 转换有一个方向 无法逆向转换
             if (validTransitions().contains(newState)) {
                 return newState;
             } else {
@@ -983,6 +1058,7 @@ public class SubscriptionState {
 
         /**
          * Test if this state is considered to have a valid position which can be used for fetching
+         * 检测此时的偏移量是否有效
          */
         boolean hasValidPosition();
     }
@@ -992,6 +1068,9 @@ public class SubscriptionState {
      * {@link FetchState#validTransitions}.
      */
     enum FetchStates implements FetchState {
+        /**
+         * 刚收到tp分配结果
+         */
         INITIALIZING() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1009,6 +1088,9 @@ public class SubscriptionState {
             }
         },
 
+        /**
+         * 代表在拉取数据
+         */
         FETCHING() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1043,6 +1125,9 @@ public class SubscriptionState {
             }
         },
 
+        /**
+         * 等待校验偏移量
+         */
         AWAIT_VALIDATION() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1069,6 +1154,9 @@ public class SubscriptionState {
      */
     public static class FetchPosition {
         public final long offset;
+        /**
+         * 对应coordinator的任期
+         */
         final Optional<Integer> offsetEpoch;
         final Metadata.LeaderAndEpoch currentLeader;
 

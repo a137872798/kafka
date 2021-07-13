@@ -38,6 +38,7 @@ import java.util.Set;
 
 /**
  * Convenience class for making asynchronous requests to the OffsetsForLeaderEpoch API
+ * 该client就是定义了有关偏移量信息的数据体包装 以及解析response
  */
 public class OffsetsForLeaderEpochClient extends AsyncClient<
         Map<TopicPartition, SubscriptionState.FetchPosition>,
@@ -49,6 +50,12 @@ public class OffsetsForLeaderEpochClient extends AsyncClient<
         super(client, logContext);
     }
 
+    /**
+     *
+     * @param node 本次目标节点
+     * @param requestData 本次要校验的所有偏移量
+     * @return
+     */
     @Override
     protected AbstractRequest.Builder<OffsetsForLeaderEpochRequest> prepareRequest(
             Node node, Map<TopicPartition, SubscriptionState.FetchPosition> requestData) {
@@ -71,20 +78,31 @@ public class OffsetsForLeaderEpochClient extends AsyncClient<
         return OffsetsForLeaderEpochRequest.Builder.forConsumer(topics);
     }
 
+    /**
+     * 当收到校验结果后触发
+     * @param node
+     * @param requestData
+     * @param response
+     * @return
+     */
     @Override
     protected OffsetForEpochResult handleResponse(
             Node node,
             Map<TopicPartition, SubscriptionState.FetchPosition> requestData,
             OffsetsForLeaderEpochResponse response) {
 
+        // 如果某些tp的偏移量检查失败 需要重试 就加入到该列表
         Set<TopicPartition> partitionsToRetry = new HashSet<>(requestData.keySet());
         Set<String> unauthorizedTopics = new HashSet<>();
+        // 处理完毕的会存到该map
         Map<TopicPartition, EpochEndOffset> endOffsets = new HashMap<>();
 
+        // 返回结果中存储了每个tp最新的偏移量
         for (OffsetForLeaderTopicResult topic : response.data().topics()) {
             for (EpochEndOffset partition : topic.partitions()) {
                 TopicPartition topicPartition = new TopicPartition(topic.topic(), partition.partition());
 
+                // 忽略未发送的tp
                 if (!requestData.containsKey(topicPartition)) {
                     logger().warn("Received unrequested topic or partition {} from response, ignoring.", topicPartition);
                     continue;

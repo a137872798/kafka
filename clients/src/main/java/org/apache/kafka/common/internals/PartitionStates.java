@@ -41,10 +41,15 @@ import java.util.function.BiConsumer;
  *
  * Note that this class is not thread-safe with the exception of {@link #size()} which returns the number of
  * partitions currently tracked.
+ * 描述当前分配到本消费者上的所有分区
  */
 public class PartitionStates<S> {
 
+    /**
+     * 存储了当前消费者所有分区信息
+     */
     private final LinkedHashMap<TopicPartition, S> map = new LinkedHashMap<>();
+
     private final Set<TopicPartition> partitionSetView = Collections.unmodifiableSet(map.keySet());
 
     /* the number of partitions that are currently assigned available in a thread safe manner */
@@ -52,6 +57,10 @@ public class PartitionStates<S> {
 
     public PartitionStates() {}
 
+    /**
+     * 将某个tp移动到链表的尾部  (linkedHashMap)
+     * @param topicPartition
+     */
     public void moveToEnd(TopicPartition topicPartition) {
         S state = map.remove(topicPartition);
         if (state != null)
@@ -61,6 +70,7 @@ public class PartitionStates<S> {
     public void updateAndMoveToEnd(TopicPartition topicPartition, S state) {
         map.remove(topicPartition);
         map.put(topicPartition, state);
+        // 同步 size 与 map.size()
         updateSize();
     }
 
@@ -121,6 +131,7 @@ public class PartitionStates<S> {
      * "batch by topic", so if we have a, b and c, each with two partitions, we may end up with something like the
      * following (the order of topics and partitions within topics is dependent on the iteration order of the received
      * map): a0, a1, b1, b0, c0, c1.
+     * 更新本消费者分配到的最新tp
      */
     public void set(Map<TopicPartition, S> partitionToState) {
         map.clear();
@@ -146,6 +157,10 @@ public class PartitionStates<S> {
         }
     }
 
+    /**
+     * 在每个tp上挂载一个额外的值
+     * @param <S>
+     */
     public static class PartitionState<S> {
         private final TopicPartition topicPartition;
         private final S value;

@@ -74,6 +74,8 @@ import java.util.regex.Pattern;
  * <p/>
  * This class can be used standalone or in combination with {@link AbstractConfig} which provides some additional
  * functionality for accessing configs.
+ * 某个配置下所有配置项的定义(限制)
+ * 一个producerConfig/consumerConfig对应一个configDef
  */
 public class ConfigDef {
 
@@ -84,7 +86,13 @@ public class ConfigDef {
      */
     public static final Object NO_DEFAULT_VALUE = new Object();
 
+    /**
+     * 这个定义对象下所有详细的配置项都存储在map中
+     */
     private final Map<String, ConfigKey> configKeys;
+    /**
+     * 配置项可能会划分在多个组中
+     */
     private final List<String> groups;
     private Set<String> configsWithNoParent;
 
@@ -120,6 +128,11 @@ public class ConfigDef {
         return defaultValues;
     }
 
+    /**
+     * 为本config增加某个配置项限制
+     * @param key
+     * @return
+     */
     public ConfigDef define(ConfigKey key) {
         if (configKeys.containsKey(key.name)) {
             throw new ConfigException("Configuration " + key.name + " is defined twice.");
@@ -362,12 +375,13 @@ public class ConfigDef {
     /**
      * Define a new configuration with no group, no order in group, no width, no display name, no dependents and no custom recommender
      * @param name          the name of the config parameter
-     * @param type          the type of the config
-     * @param defaultValue  the default value to use if this config isn't present
-     * @param validator     the validator to use in checking the correctness of the config
-     * @param importance    the importance of this config
-     * @param documentation the documentation string for the config
+     * @param type          the type of the config  配置值类型
+     * @param defaultValue  the default value to use if this config isn't present  默认值
+     * @param validator     the validator to use in checking the correctness of the config 配置值校验器
+     * @param importance    the importance of this config   配置项的重要程度
+     * @param documentation the documentation string for the config  描述信息
      * @return This ConfigDef so you can chain calls
+     * 追加某个配置项的定义
      */
     public ConfigDef define(String name, Type type, Object defaultValue, Validator validator, Importance importance, String documentation) {
         return define(name, type, defaultValue, validator, importance, documentation, null, -1, Width.NONE, name);
@@ -469,9 +483,11 @@ public class ConfigDef {
      * @param props The configs to parse and validate.
      * @return Parsed and validated configs. The key will be the config name and the value will be the value parsed into
      * the appropriate type (int, string, etc).
+     * 使用map中的数据 填充本def下定义的各种配置
      */
     public Map<String, Object> parse(Map<?, ?> props) {
         // Check all configurations are defined
+        // 代表某些配置依赖与其他配置 并且未设置
         List<String> undefinedConfigKeys = undefinedDependentConfigs();
         if (!undefinedConfigKeys.isEmpty()) {
             String joined = Utils.join(undefinedConfigKeys, ",");
@@ -479,22 +495,33 @@ public class ConfigDef {
         }
         // parse all known keys
         Map<String, Object> values = new HashMap<>();
+        // 通过配置key 去map中找到配置值 并设置到values中
         for (ConfigKey key : configKeys.values())
             values.put(key.name, parseValue(key, props.get(key.name), props.containsKey(key.name)));
         return values;
     }
 
+    /**
+     * 设置某个配置项
+     * @param key 该配置项的key
+     * @param value 从外部传入的配置值
+     * @param isSet value是否有值 没有会使用默认值
+     * @return
+     */
     Object parseValue(ConfigKey key, Object value, boolean isSet) {
         Object parsedValue;
         if (isSet) {
+            // 根据def定义的类型 转换传入的配置值
             parsedValue = parseType(key.name, value, key.type);
         // props map doesn't contain setting, the key is required because no default value specified - its an error
+            // 代表本次value为null 检测是否设置了默认值 没有的话抛出异常
         } else if (NO_DEFAULT_VALUE.equals(key.defaultValue)) {
             throw new ConfigException("Missing required configuration \"" + key.name + "\" which has no default value.");
         } else {
             // otherwise assign setting its default value
             parsedValue = key.defaultValue;
         }
+        // 如果设置了配置校验器 进行校验
         if (key.validator != null) {
             key.validator.ensureValid(key.name, parsedValue);
         }
@@ -548,6 +575,10 @@ public class ConfigDef {
         return configValues;
     }
 
+    /**
+     * 首先检查有依赖关系的配置是否都设置了
+     * @return 返回未设置的依赖配置
+     */
     private List<String> undefinedDependentConfigs() {
         Set<String> undefinedConfigKeys = new HashSet<>();
         for (ConfigKey configKey : configKeys.values()) {
@@ -1121,6 +1152,9 @@ public class ConfigDef {
         }
     }
 
+    /**
+     * 将对于某个配置项的各种信息包装成一个configKey对象
+     */
     public static class ConfigKey {
         public final String name;
         public final Type type;

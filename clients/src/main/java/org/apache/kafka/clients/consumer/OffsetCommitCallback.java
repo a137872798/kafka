@@ -25,6 +25,7 @@ import java.util.Map;
 /**
  * A callback interface that the user can implement to trigger custom actions when a commit request completes. The callback
  * may be executed in any thread calling {@link Consumer#poll(java.time.Duration) poll()}.
+ * 当提交偏移量成功后触发的回调
  */
 public interface OffsetCommitCallback {
 

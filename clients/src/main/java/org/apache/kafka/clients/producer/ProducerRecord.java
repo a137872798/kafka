@@ -45,9 +45,13 @@ import java.util.Objects;
  * <p>
  * In either of the cases above, the timestamp that has actually been used will be returned to user in
  * {@link RecordMetadata}
+ * 需要将待发送的数据包装成该对象后 才能通过producer进行发送
  */
 public class ProducerRecord<K, V> {
 
+    /**
+     * 本次发送消息的目标topic/partition
+     */
     private final String topic;
     private final Integer partition;
     private final Headers headers;

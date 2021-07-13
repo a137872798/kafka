@@ -37,6 +37,7 @@ import org.apache.kafka.common.TopicPartition;
  * assignment decisions. For this, you can override {@link #subscriptionUserData(Set)} and provide custom
  * userData in the returned Subscription. For example, to have a rack-aware assignor, an implementation
  * can use this user data to forward the rackId belonging to each member.
+ * 这个对象是辅助分配分区的
  */
 public interface ConsumerPartitionAssignor {
 
@@ -47,6 +48,7 @@ public interface ConsumerPartitionAssignor {
      * @param topics Topics subscribed to through {@link org.apache.kafka.clients.consumer.KafkaConsumer#subscribe(java.util.Collection)}
      *               and variants
      * @return nullable subscription user data
+     * 生成一些用户自定义的数据 这些数据会影响rebalance的结果  比如指定机架
      */
     default ByteBuffer subscriptionUserData(Set<String> topics) {
         return null;
@@ -134,6 +136,9 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 描述某个member的分配结果
+     */
     final class Assignment {
         private List<TopicPartition> partitions;
         private ByteBuffer userData;
@@ -164,6 +169,9 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 该对象维护了某次rebalance中所有member订阅的topic
+     */
     final class GroupSubscription {
         private final Map<String, Subscription> subscriptions;
 
@@ -176,7 +184,14 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 描述一个消费者组的分配结果
+     */
     final class GroupAssignment {
+
+        /**
+         * key是memberId value是分配到该成员下的所有tp
+         */
         private final Map<String, Assignment> assignments;
 
         public GroupAssignment(Map<String, Assignment> assignments) {
@@ -204,9 +219,17 @@ public interface ConsumerPartitionAssignor {
      * immediately, but instead may indicate consumers the need for partition revocation so that the revoked
      * partitions can be reassigned to other consumers in the next rebalance event. This is designed for sticky assignment
      * logic which attempts to minimize partition reassignment with cooperative adjustments.
+     * 重分配协议
      */
     enum RebalanceProtocol {
-        EAGER((byte) 0), COOPERATIVE((byte) 1);
+        /**
+         * 急切的 应该就是由一个消费者来决定
+         */
+        EAGER((byte) 0),
+        /**
+         * 合作的 由group内的所有消费者协商
+         */
+        COOPERATIVE((byte) 1);
 
         private final byte id;
 

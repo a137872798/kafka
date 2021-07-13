@@ -557,6 +557,7 @@ import static org.apache.kafka.clients.consumer.internals.PartitionAssignorAdapt
  * There are many possible variations on this approach. For example each processor thread can have its own queue, and
  * the consumer threads can hash into these queues using the TopicPartition to ensure in-order consumption and simplify
  * commit.
+ * kafka消费者对象
  */
 public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
@@ -666,6 +667,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 keyDeserializer, valueDeserializer);
     }
 
+    /**
+     * 初始化消费者对象
+     * @param config
+     * @param keyDeserializer
+     * @param valueDeserializer
+     */
     @SuppressWarnings("unchecked")
     KafkaConsumer(ConsumerConfig config, Deserializer<K> keyDeserializer, Deserializer<V> valueDeserializer) {
         try {
@@ -686,6 +693,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             }
 
             this.log = logContext.logger(getClass());
+            // 获取自动提交配置
             boolean enableAutoCommit = config.maybeOverrideEnableAutoCommit();
             groupId.ifPresent(groupIdStr -> {
                 if (groupIdStr.isEmpty()) {
@@ -700,11 +708,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             this.metrics = buildMetrics(config, time, clientId);
             this.retryBackoffMs = config.getLong(ConsumerConfig.RETRY_BACKOFF_MS_CONFIG);
 
+            // 获取消费端的拦截器 核心是2个钩子 一个是消费消息时的钩子 还有一个是提交偏移量时的钩子
             List<ConsumerInterceptor<K, V>> interceptorList = (List) config.getConfiguredInstances(
                     ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG,
                     ConsumerInterceptor.class,
                     Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId));
             this.interceptors = new ConsumerInterceptors<>(interceptorList);
+
+            // 有关key/value反序列化对象与生产者相对应 用于将序列化的数据流还原成object
             if (keyDeserializer == null) {
                 this.keyDeserializer = config.getConfiguredInstance(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, Deserializer.class);
                 this.keyDeserializer.configure(config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId)), true);
@@ -719,28 +730,44 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 config.ignore(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
                 this.valueDeserializer = valueDeserializer;
             }
+
+            // 获取有关偏移量的重置策略  默认采用latest
             OffsetResetStrategy offsetResetStrategy = OffsetResetStrategy.valueOf(config.getString(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG).toUpperCase(Locale.ROOT));
+
+            // 生成描述订阅状态的对象
             this.subscriptions = new SubscriptionState(logContext, offsetResetStrategy);
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keyDeserializer,
                     valueDeserializer, metrics.reporters(), interceptorList);
+
+            // 生成消费者元数据信息
             this.metadata = new ConsumerMetadata(retryBackoffMs,
                     config.getLong(ConsumerConfig.METADATA_MAX_AGE_CONFIG),
                     !config.getBoolean(ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG),
                     config.getBoolean(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG),
                     subscriptions, logContext, clusterResourceListeners);
+
+            // 同样在初始化时要指定一个起始服务器的地址 一开始的元数据信息需要从那里获取  (此时集群中所有可用的topic等等信息)
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
                     config.getList(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG), config.getString(ConsumerConfig.CLIENT_DNS_LOOKUP_CONFIG));
             this.metadata.bootstrap(addresses);
             String metricGrpPrefix = "consumer";
 
-            FetcherMetricsRegistry metricsRegistry = new FetcherMetricsRegistry(Collections.singleton(CLIENT_ID_METRIC_TAG), metricGrpPrefix);
+            // 同producer
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, time, logContext);
+
+            FetcherMetricsRegistry metricsRegistry = new FetcherMetricsRegistry(Collections.singleton(CLIENT_ID_METRIC_TAG), metricGrpPrefix);
+
+            // 获取隔离级别 (指的是消息的隔离级别)
             IsolationLevel isolationLevel = IsolationLevel.valueOf(
                     config.getString(ConsumerConfig.ISOLATION_LEVEL_CONFIG).toUpperCase(Locale.ROOT));
             Sensor throttleTimeSensor = Fetcher.throttleTimeSensor(metrics, metricsRegistry);
+
+            // 发送心跳的间隔时间
             int heartbeatIntervalMs = config.getInt(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG);
 
             ApiVersions apiVersions = new ApiVersions();
+
+            // 初始化client对象 producer的client是由sender对象来管理的
             NetworkClient netClient = new NetworkClient(
                     new Selector(config.getLong(ConsumerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext),
                     this.metadata,
@@ -759,6 +786,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     apiVersions,
                     throttleTimeSensor,
                     logContext);
+
+            // 消费者对基础的tcpClient做了增强
             this.client = new ConsumerNetworkClient(
                     logContext,
                     netClient,
@@ -768,10 +797,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                     heartbeatIntervalMs); //Will avoid blocking an extended period of time to prevent heartbeat thread starvation
 
+            // 获取一组分配规则对象 决定了当前消费者会处理哪几个分区
             this.assignors = getAssignorInstances(config.getList(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG),
                     config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId)));
 
             // no coordinator will be constructed for the default (null) group id
+            // 如果设置了groupId 就会需要一个协调者对象  默认情况下都会要求设置groupId
             this.coordinator = !groupId.isPresent() ? null :
                 new ConsumerCoordinator(groupRebalanceConfig,
                         logContext,
@@ -786,6 +817,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                         config.getInt(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG),
                         this.interceptors,
                         config.getBoolean(ConsumerConfig.THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED));
+
+            // fetcher对象与sender对象相对应 用于拉取数据
             this.fetcher = new Fetcher<>(
                     logContext,
                     this.client,
@@ -885,6 +918,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * to the consumer (which may be none if the assignment hasn't happened yet, or the partitions are in the
      * process of getting reassigned).
      * @return The set of partitions currently assigned to this consumer
+     * 获取当前消费者分配到的所有tp
      */
     public Set<TopicPartition> assignment() {
         acquireAndEnsureOpen();
@@ -899,6 +933,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * Get the current subscription. Will return the same topics used in the most recent call to
      * {@link #subscribe(Collection, ConsumerRebalanceListener)}, or an empty set if no such call has been made.
      * @return The set of topics currently subscribed to
+     * 获取本消费者的订阅信息 可能是某个topic 可能是某个正则表达式
      */
     public Set<String> subscription() {
         acquireAndEnsureOpen();
@@ -943,14 +978,18 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalStateException If {@code subscribe()} is called previously with pattern, or assign is called
      *                               previously (without a subsequent call to {@link #unsubscribe()}), or if not
      *                               configured at-least one partition assignment strategy
+     *                               开始订阅一组topic 这里会不断pull消息
+     *                               注意这里的订阅模式就是topic 而不是pattern
      */
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
         acquireAndEnsureOpen();
         try {
+            // 在订阅消息前必须设置groupId
             maybeThrowInvalidGroupIdException();
             if (topics == null)
                 throw new IllegalArgumentException("Topic collection to subscribe to cannot be null");
+            // 没有指定topic 代表本次是想取消订阅
             if (topics.isEmpty()) {
                 // treat subscribing to empty topic list as the same as unsubscribing
                 this.unsubscribe();
@@ -960,10 +999,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                         throw new IllegalArgumentException("Topic collection to subscribe to cannot contain null or empty topic");
                 }
 
+                // 必须要求配置分区分配器对象
                 throwIfNoAssignorsConfigured();
+                // 由于本次发起了新的订阅请求 要清理掉之前的订阅信息
                 fetcher.clearBufferedDataForUnassignedTopics(topics);
                 log.info("Subscribed to topic(s): {}", Utils.join(topics, ", "));
+                // 开始订阅新的topic  这里并没有真正去拉取分配给本consumer的tp信息 应该是在某个地方有异步处理
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
+                    // 标记需要更新元数据 这样在io线程中就会发送更新元数据的请求
                     metadata.requestUpdateForNewTopics();
             }
         } finally {
@@ -991,6 +1034,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalStateException If {@code subscribe()} is called previously with pattern, or assign is called
      *                               previously (without a subsequent call to {@link #unsubscribe()}), or if not
      *                               configured at-least one partition assignment strategy
+     *                               默认情况下 rebalance监听器是NoOpConsumerRebalanceListener
      */
     @Override
     public void subscribe(Collection<String> topics) {
@@ -1015,6 +1059,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalStateException If {@code subscribe()} is called previously with topics, or assign is called
      *                               previously (without a subsequent call to {@link #unsubscribe()}), or if not
      *                               configured at-least one partition assignment strategy
+     *                               针对正则表达式进行订阅
      */
     @Override
     public void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
@@ -1028,6 +1073,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             throwIfNoAssignorsConfigured();
             log.info("Subscribed to pattern: '{}'", pattern);
             this.subscriptions.subscribe(pattern, listener);
+            // 基于当前metadata更新订阅信息
             this.coordinator.updatePatternSubscription(metadata.fetch());
             this.metadata.requestUpdateForNewTopics();
         } finally {
@@ -1061,12 +1107,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * This also clears any partitions directly assigned through {@link #assign(Collection)}.
      *
      * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. rebalance callback errors)
+     * 停止订阅
      */
     public void unsubscribe() {
         acquireAndEnsureOpen();
         try {
             fetcher.clearBufferedDataForUnassignedPartitions(Collections.emptySet());
             if (this.coordinator != null) {
+                // 当本消费者不再订阅数据的时候 协调对象可以从与其他节点的交互中脱离
                 this.coordinator.onLeavePrepare();
                 this.coordinator.maybeLeaveGroup("the consumer unsubscribed from all topics");
             }
@@ -1158,6 +1206,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *
      * @deprecated Since 2.0. Use {@link #poll(Duration)}, which does not block beyond the timeout awaiting partition
      *             assignment. See <a href="https://cwiki.apache.org/confluence/x/5kiHB">KIP-266</a> for more information.
+     *             在设置了订阅的topic或者正则信息后 通过调用poll开始拉取工作
      */
     @Deprecated
     @Override
@@ -1211,6 +1260,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     }
 
     /**
+     * 根据订阅的topic pattern 不断的拉取消息
      * @throws KafkaException if the rebalance callback throws exception
      */
     private ConsumerRecords<K, V> poll(final Timer timer, final boolean includeMetadataInTimeout) {
@@ -1218,17 +1268,21 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         try {
             this.kafkaConsumerMetrics.recordPollStart(timer.currentTimeMs());
 
+            // 如果没有指定任何订阅信息 无法拉取数据
             if (this.subscriptions.hasNoSubscriptionOrUserAssignment()) {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
 
             do {
+                // 每轮拉取都会检测是否设置了唤醒标记 发现被唤醒时会抛出异常并停止拉取消息
                 client.maybeTriggerWakeup();
 
+                // 这里代表仅发出join请求 不会阻塞等待
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
+                    // 如果当前时间不包含拉取元数据的 那么会先自旋确保拿到最新的元数据  并且会等待拿到分配信息 以及获取拉取的目标偏移量
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
                         log.warn("Still waiting for metadata");
                     }
@@ -1257,11 +1311,19 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         }
     }
 
+    /**
+     * 更新有关本消费者分配到的tp信息
+     * @param timer
+     * @param waitForJoinGroup  是否需要等到加入到group为止
+     * @return
+     */
     boolean updateAssignmentMetadataIfNeeded(final Timer timer, final boolean waitForJoinGroup) {
+        // 代表获取分配信息超时 无法继续拉取数据 
         if (coordinator != null && !coordinator.poll(timer, waitForJoinGroup)) {
             return false;
         }
 
+        // 接下来要获取读取的起始偏移量
         return updateFetchPositions(timer);
     }
 
@@ -2394,9 +2456,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws NoOffsetForPartitionException If no offset is stored for a given partition and no offset reset policy is
      *             defined
      * @return true iff the operation completed without timing out
+     * 获取拉取数据的起始偏移量
      */
     private boolean updateFetchPositions(final Timer timer) {
         // If any partitions have been truncated due to a leader change, we need to validate the offsets
+        // 对现有的偏移量进行校验
         fetcher.validateOffsetsIfNeeded();
 
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
@@ -2438,6 +2502,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * when the lock is not available, however, we just throw an exception (since multi-threaded usage is not
      * supported).
      * @throws ConcurrentModificationException if another thread already has the lock
+     * 有关消费者信息的访问 不适合在并发场景获取
      */
     private void acquire() {
         long threadId = Thread.currentThread().getId();

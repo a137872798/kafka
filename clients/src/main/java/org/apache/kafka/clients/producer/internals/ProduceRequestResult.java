@@ -28,10 +28,14 @@ import java.util.concurrent.TimeUnit;
  * A class that models the future completion of a produce request for a single partition. There is one of these per
  * partition in a produce request and it is shared by all the {@link RecordMetadata} instances that are batched together
  * for the same partition in the request.
+ * 一个batch对象对应一个该对象 本对象负责阻塞获取batch下record的所有线程
  */
 public class ProduceRequestResult {
 
     private final CountDownLatch latch = new CountDownLatch(1);
+    /**
+     * 本result对应的batch对应的tp
+     */
     private final TopicPartition topicPartition;
 
     private volatile Long baseOffset = null;
@@ -51,7 +55,7 @@ public class ProduceRequestResult {
      * Set the result of the produce request.
      *
      * @param baseOffset The base offset assigned to the record
-     * @param logAppendTime The log append time or -1 if CreateTime is being used
+     * @param logAppendTime The log append time or -1 if CreateTime is being used  代表记录成功追加到log的时间 如果本次异常结束 该值为-1
      * @param error The error that occurred if there was one, or null
      */
     public void set(long baseOffset, long logAppendTime, RuntimeException error) {
@@ -71,6 +75,7 @@ public class ProduceRequestResult {
 
     /**
      * Await the completion of this request
+     * 外部线程等待本batch下所有record收到结果
      */
     public void await() throws InterruptedException {
         latch.await();

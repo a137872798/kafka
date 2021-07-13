@@ -24,6 +24,8 @@ import java.util.Optional;
 
 /**
  * Class to extract group rebalance related configs.
+ * 存储有关消费者组的再平衡信息配置  同一组下可能会有多个消费者，如何分摊每个消费者的任务有助于提升性能
+ * 简单的bean对象
  */
 public class GroupRebalanceConfig {
 
@@ -45,6 +47,11 @@ public class GroupRebalanceConfig {
     public final long retryBackoffMs;
     public final boolean leaveGroupOnClose;
 
+    /**
+     * 这里只是从consumerConfig中抽取相关的配置项
+     * @param config
+     * @param protocolType
+     */
     public GroupRebalanceConfig(AbstractConfig config, ProtocolType protocolType) {
         this.sessionTimeoutMs = config.getInt(CommonClientConfigs.SESSION_TIMEOUT_MS_CONFIG);
 

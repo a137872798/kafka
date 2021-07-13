@@ -206,6 +206,11 @@ public class MetadataCache {
                 invalidTopics, internalTopics, controller);
     }
 
+    /**
+     * 在初始阶段 只能将服务器地址转换成node对象 其余数据都为空
+     * @param addresses
+     * @return
+     */
     static MetadataCache bootstrap(List<InetSocketAddress> addresses) {
         Map<Integer, Node> nodes = new HashMap<>();
         int nodeId = -1;

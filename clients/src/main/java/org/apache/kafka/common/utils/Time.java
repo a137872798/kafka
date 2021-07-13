@@ -28,6 +28,9 @@ import java.util.function.Supplier;
  */
 public interface Time {
 
+    /**
+     * 这是time对象的默认实现
+     */
     Time SYSTEM = new SystemTime();
 
     /**

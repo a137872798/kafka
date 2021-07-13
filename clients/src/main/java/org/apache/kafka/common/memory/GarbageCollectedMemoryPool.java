@@ -30,12 +30,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * An extension of SimpleMemoryPool that tracks allocated buffers and logs an error when they "leak"
  * (when they are garbage-collected without having been release()ed).
  * THIS IMPLEMENTATION IS A DEVELOPMENT/DEBUGGING AID AND IS NOT MEANT PRO PRODUCTION USE.
+ * SimpleMemoryPool实际上buffer并没有被缓存 最终会被GC回收
  */
 public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements AutoCloseable {
 
     private final ReferenceQueue<ByteBuffer> garbageCollectedBuffers = new ReferenceQueue<>();
     //serves 2 purposes - 1st it maintains the ref objects reachable (which is a requirement for them
     //to ever be enqueued), 2nd keeps some (small) metadata for every buffer allocated
+    //维护正在使用中的buffer
     private final Map<BufferReference, BufferMetadata> buffersInFlight = new ConcurrentHashMap<>();
     private final GarbageCollectionListener gcListener = new GarbageCollectionListener();
     private final Thread gcListenerThread;
@@ -44,14 +46,21 @@ public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements Auto
     public GarbageCollectedMemoryPool(long sizeBytes, int maxSingleAllocationSize, boolean strict, Sensor oomPeriodSensor) {
         super(sizeBytes, maxSingleAllocationSize, strict, oomPeriodSensor);
         this.alive = true;
+        // 开启一个gc监听器
         this.gcListenerThread = new Thread(gcListener, "memory pool GC listener");
         this.gcListenerThread.setDaemon(true); //so we dont need to worry about shutdown
         this.gcListenerThread.start();
     }
 
+    /**
+     * 当申请到一个buffer后 触发该方法
+     * @param justAllocated
+     */
     @Override
     protected void bufferToBeReturned(ByteBuffer justAllocated) {
+        // 将buffer用weakRef包裹 同时添加到引用队列
         BufferReference ref = new BufferReference(justAllocated, garbageCollectedBuffers);
+        // 生成一个描述buffer大小的元数据对象
         BufferMetadata metadata = new BufferMetadata(justAllocated.capacity());
         if (buffersInFlight.put(ref, metadata) != null)
             //this is a bug. it means either 2 different co-existing buffers got
@@ -61,6 +70,10 @@ public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements Auto
         log.trace("allocated buffer of size {} and identity {}", sizeBytes, ref.hashCode);
     }
 
+    /**
+     * 当某个buffer被回收时触发
+     * @param justReleased
+     */
     @Override
     protected void bufferToBeReleased(ByteBuffer justReleased) {
         BufferReference ref = new BufferReference(justReleased); //used ro lookup only
@@ -82,11 +95,15 @@ public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements Auto
         gcListenerThread.interrupt();
     }
 
+    /**
+     * 监控gc回收
+     */
     private class GarbageCollectionListener implements Runnable {
         @Override
         public void run() {
             while (alive) {
                 try {
+                    // 找到所有被gc回收的buffer
                     BufferReference ref = (BufferReference) garbageCollectedBuffers.remove(); //blocks
                     ref.clear();
                     //this cannot race with a release() call because an object is either reachable or not,
@@ -102,6 +119,7 @@ public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements Auto
                         continue;
                     }
 
+                    // 这个类主要就是解决 SimpleMemoryPool忘记调用release()复位availableMemory的问题
                     availableMemory.addAndGet(metadata.sizeBytes);
                     log.error("Reclaimed buffer of size {} and identity {} that was not properly release()ed. This is a bug.", metadata.sizeBytes, ref.hashCode);
                 } catch (InterruptedException e) {
@@ -121,6 +139,9 @@ public class GarbageCollectedMemoryPool extends SimpleMemoryPool implements Auto
         }
     }
 
+    /**
+     * 使用弱引用包裹 弱引用相当于插入了一个被回收的钩子 当没有其他强引用指向该buffer时 buffer就会被回收 同时加入到引用队列中 这样就可以被gcListener观测到
+     */
     private static final class BufferReference extends WeakReference<ByteBuffer> {
         private final int hashCode;
 

@@ -42,6 +42,7 @@ import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
 /**
  * Configuration for the Kafka Producer. Documentation for these configurations can be found in the <a
  * href="http://kafka.apache.org/documentation.html#producerconfigs">Kafka documentation</a>
+ * 包含了所有生产者特有的配置信息
  */
 public class ProducerConfig extends AbstractConfig {
 
@@ -390,6 +391,7 @@ public class ProducerConfig extends AbstractConfig {
                                         CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
                                 .define(PARTITIONER_CLASS_CONFIG,
                                         Type.CLASS,
+                                        // 默认的分区实现类
                                         DefaultPartitioner.class,
                                         Importance.MEDIUM, PARTITIONER_CLASS_DOC)
                                 .define(INTERCEPTOR_CLASSES_CONFIG,
@@ -501,10 +503,18 @@ public class ProducerConfig extends AbstractConfig {
         return appendSerializerToConfig(configs, keySerializer, valueSerializer);
     }
 
+    /**
+     * 将有关Serializer的信息追加到configs中
+     * @param configs  存储当前设置的所有config
+     * @param keySerializer
+     * @param valueSerializer
+     * @return
+     */
     static Map<String, Object> appendSerializerToConfig(Map<String, Object> configs,
             Serializer<?> keySerializer,
             Serializer<?> valueSerializer) {
         Map<String, Object> newConfigs = new HashMap<>(configs);
+        // 这2个serializer有特殊的配置名
         if (keySerializer != null)
             newConfigs.put(KEY_SERIALIZER_CLASS_CONFIG, keySerializer.getClass());
         if (valueSerializer != null)
@@ -532,6 +542,10 @@ public class ProducerConfig extends AbstractConfig {
         super(CONFIG, props);
     }
 
+    /**
+     * 通过一个map对象初始化 config对象
+     * @param props
+     */
     public ProducerConfig(Map<String, Object> props) {
         super(CONFIG, props);
     }

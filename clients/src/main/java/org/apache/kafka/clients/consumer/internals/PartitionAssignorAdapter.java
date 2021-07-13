@@ -99,6 +99,8 @@ public class PartitionAssignorAdapter implements ConsumerPartitionAssignor {
      * based on the class names/types specified by {@link org.apache.kafka.clients.consumer.ConsumerConfig#PARTITION_ASSIGNMENT_STRATEGY_CONFIG}
      * where any instances of the old {@link PartitionAssignor} interface are wrapped in an adapter to the new
      * {@link org.apache.kafka.clients.consumer.ConsumerPartitionAssignor} interface
+     * 通过加载配置信息中设置的实现类 来初始化消费者分区分配对象
+     * 这里主要就是通过反射创建对象
      */
     public static List<ConsumerPartitionAssignor> getAssignorInstances(List<String> assignorClasses, Map<String, Object> configs) {
         List<ConsumerPartitionAssignor> assignors = new ArrayList<>();

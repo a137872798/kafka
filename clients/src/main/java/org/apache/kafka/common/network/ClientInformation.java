@@ -19,6 +19,9 @@ package org.apache.kafka.common.network;
 
 import java.util.Objects;
 
+/**
+ * 描述客户端信息
+ */
 public class ClientInformation {
     public static final String UNKNOWN_NAME_OR_VERSION = "unknown";
     public static final ClientInformation EMPTY = new ClientInformation(UNKNOWN_NAME_OR_VERSION, UNKNOWN_NAME_OR_VERSION);
