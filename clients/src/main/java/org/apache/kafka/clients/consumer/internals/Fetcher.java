@@ -147,6 +147,7 @@ public class Fetcher<K, V> implements Closeable {
     private final ConsumerMetadata metadata;
     private final FetchManagerMetrics sensors;
     private final SubscriptionState subscriptions;
+
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
     private final BufferSupplier decompressionBufferSupplier = BufferSupplier.create();
     private final Deserializer<K> keyDeserializer;
@@ -235,6 +236,7 @@ public class Fetcher<K, V> implements Closeable {
 
     /**
      * Represents data about an offset returned by a broker.
+     * 存储了结果偏移量
      */
     static class ListOffsetData {
         final long offset;
@@ -269,11 +271,13 @@ public class Fetcher<K, V> implements Closeable {
      * Set-up a fetch request for any node that we have assigned partitions for which doesn't already have
      * an in-flight fetch or pending fetch data.
      * @return number of fetches sent
+     * 发送拉取消息的请求
      */
     public synchronized int sendFetches() {
         // Update metrics in case there was an assignment change
         sensors.maybeUpdateAssignment(subscriptions);
 
+        // 只有处于fetching的tp可以发送拉取请求
         Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests();
         for (Map.Entry<Node, FetchSessionHandler.FetchRequestData> entry : fetchRequestMap.entrySet()) {
             final Node fetchTarget = entry.getKey();
@@ -484,6 +488,7 @@ public class Fetcher<K, V> implements Closeable {
      *
      * @throws org.apache.kafka.clients.consumer.NoOffsetForPartitionException If no offset reset strategy is defined
      *   and one or more partitions aren't awaiting a seekToBeginning() or seekToEnd().
+     *   重置偏移量
      */
     public void resetOffsetsIfNeeded() {
         // Raise exception from previous offset fetch if there is one
@@ -491,17 +496,20 @@ public class Fetcher<K, V> implements Closeable {
         if (exception != null)
             throw exception;
 
+        // 找到所有需要重置偏移量的tp 会在fetchState上设置对应状态  通过增加retry时间来避免在不断的轮询中重复发送请求
         Set<TopicPartition> partitions = subscriptions.partitionsNeedingReset(time.milliseconds());
         if (partitions.isEmpty())
             return;
 
         final Map<TopicPartition, Long> offsetResetTimestamps = new HashMap<>();
         for (final TopicPartition partition : partitions) {
+            // 设置时间戳  EARLIEST_TIMESTAMP/LATEST_TIMESTAMP 分别对应2种重置策略
             Long timestamp = offsetResetStrategyTimestamp(partition);
             if (timestamp != null)
                 offsetResetTimestamps.put(partition, timestamp);
         }
 
+        // 开始重置偏移量 这个时候只知道重置的类型 但是不知道对应tp此时的偏移量情况  coordinator只是记录了group消费的偏移量 并不清楚某个tp此时最新/最旧的偏移量
         resetOffsetsAsync(offsetResetTimestamps);
     }
 
@@ -510,7 +518,7 @@ public class Fetcher<K, V> implements Closeable {
      * 先校验偏移量
      */
     public void validateOffsetsIfNeeded() {
-        // 代表之前拉取偏移量时出现了异常 直接抛出
+        // 此前校验偏移量时 出现了异常 直接抛出
         RuntimeException exception = cachedOffsetForLeaderException.getAndSet(null);
         if (exception != null)
             throw exception;
@@ -629,11 +637,17 @@ public class Fetcher<K, V> implements Closeable {
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
         Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>();
         Queue<CompletedFetch> pausedCompletedFetches = new ArrayDeque<>();
+
+        // 单次拉取的消息有一个上限值 默认是500条
         int recordsRemaining = maxPollRecords;
 
         try {
+            // 发送拉取请求与处理结果发生在2个时间点 可能上一轮发起了请求但是还未收到结果，在时间到了的情况下还是会进入下一轮，在某次调用client.poll时可能拿到了结果
+            // 那么这时就可以处理之前收到的结果
             while (recordsRemaining > 0) {
+                // 首次触发拉取操作 nextInLineFetch对象还未设置
                 if (nextInLineFetch == null || nextInLineFetch.isConsumed) {
+                    // 代表还没有发送过拉取请求 直接返回
                     CompletedFetch records = completedFetches.peek();
                     if (records == null) break;
 
@@ -750,43 +764,68 @@ public class Fetcher<K, V> implements Closeable {
         return emptyList();
     }
 
-    // Visible for testing
+    /**
+     * 设置偏移量 同时将状态修改成fetching 只有这样的tp 才能正常拉取数据
+     * @param partition
+     * @param requestedResetStrategy
+     * @param offsetData
+     */
     void resetOffsetIfNeeded(TopicPartition partition, OffsetResetStrategy requestedResetStrategy, ListOffsetData offsetData) {
+        // 生成当前消费的起始偏移量
         FetchPosition position = new FetchPosition(
             offsetData.offset,
             Optional.empty(), // This will ensure we skip validation
             metadata.currentLeader(partition));
+        // 检测是否需要更新元数据
         offsetData.leaderEpoch.ifPresent(epoch -> metadata.updateLastSeenEpochIfNewer(partition, epoch));
+        // 标记成fetching
         subscriptions.maybeSeekUnvalidated(partition, position, requestedResetStrategy);
     }
 
+    /**
+     * 从tp.leader所在的节点获取最新的偏移量
+     * @param partitionResetTimestamps
+     */
     private void resetOffsetsAsync(Map<TopicPartition, Long> partitionResetTimestamps) {
+        // 根据tp分组 并将获取偏移量的请求发往不同的node
         Map<Node, Map<TopicPartition, ListOffsetsPartition>> timestampsToSearchByNode =
                 groupListOffsetRequests(partitionResetTimestamps, new HashSet<>());
+
+        // 这里开始发送请求
         for (Map.Entry<Node, Map<TopicPartition, ListOffsetsPartition>> entry : timestampsToSearchByNode.entrySet()) {
             Node node = entry.getKey();
             final Map<TopicPartition, ListOffsetsPartition> resetTimestamps = entry.getValue();
+            // 标记在短时间内不需要重复发送
             subscriptions.setNextAllowedRetry(resetTimestamps.keySet(), time.milliseconds() + requestTimeoutMs);
 
+            // 开始发送获取偏移量的请求
             RequestFuture<ListOffsetResult> future = sendListOffsetRequest(node, resetTimestamps, false);
+
+            // 在获取到偏移量 并将fetchState修改成 fetching之前 应该是不会对这些tp发起拉取请求的
             future.addListener(new RequestFutureListener<ListOffsetResult>() {
                 @Override
                 public void onSuccess(ListOffsetResult result) {
+
+                    // 代表部分获取偏移量失败 标记需要更新元数据 并在一个补偿时间后进行重试
+                    // 在整个拉取过程中会不断重复 对偏移量的校验 拉取fetchState为init的tp的偏移量 拉取消息
                     if (!result.partitionsToRetry.isEmpty()) {
                         subscriptions.requestFailed(result.partitionsToRetry, time.milliseconds() + retryBackoffMs);
                         metadata.requestUpdate();
                     }
 
+                    // 转换成fetching 以及设置偏移量
                     for (Map.Entry<TopicPartition, ListOffsetData> fetchedOffset : result.fetchedOffsets.entrySet()) {
                         TopicPartition partition = fetchedOffset.getKey();
                         ListOffsetData offsetData = fetchedOffset.getValue();
                         ListOffsetsPartition requestedReset = resetTimestamps.get(partition);
+                        // 设置偏移量
                         resetOffsetIfNeeded(partition, timestampToOffsetResetStrategy(requestedReset.timestamp()), offsetData);
                     }
                 }
 
                 @Override
                 public void onFailure(RuntimeException e) {
+                    // 设置重试时间 并且设置需要更新元数据
                     subscriptions.requestFailed(resetTimestamps.keySet(), time.milliseconds() + retryBackoffMs);
                     metadata.requestUpdate();
 
@@ -881,6 +920,7 @@ public class Fetcher<K, V> implements Closeable {
                         truncationOpt.ifPresent(truncations::add);
                     });
 
+                    // 根据这些截断的信息产生一个异常对象
                     if (!truncations.isEmpty()) {
                         maybeSetOffsetForLeaderException(buildLogTruncationException(truncations));
                     }
@@ -888,6 +928,7 @@ public class Fetcher<K, V> implements Closeable {
 
                 @Override
                 public void onFailure(RuntimeException e) {
+                    // 代表短时间内不会对这组失败的tp发起校验请求
                     subscriptions.requestFailed(fetchPositions.keySet(), time.milliseconds() + retryBackoffMs);
                     metadata.requestUpdate();
 
@@ -973,22 +1014,29 @@ public class Fetcher<K, V> implements Closeable {
      * @param timestampsToSearch The mapping from partitions ot the target timestamps
      * @param partitionsToRetry A set of topic partitions that will be extended with partitions
      *                          that need metadata update or re-connect to the leader.
+     *                          将tp按照node分组
      */
     private Map<Node, Map<TopicPartition, ListOffsetsPartition>> groupListOffsetRequests(
             Map<TopicPartition, Long> timestampsToSearch,
             Set<TopicPartition> partitionsToRetry) {
         final Map<TopicPartition, ListOffsetsPartition> partitionDataMap = new HashMap<>();
+
+        // 时间戳实际上代表的是拉取的偏移量类型 最新/最旧 可能以后会支持按照时间戳定位起始偏移量?
         for (Map.Entry<TopicPartition, Long> entry: timestampsToSearch.entrySet()) {
             TopicPartition tp  = entry.getKey();
             Long offset = entry.getValue();
+            // 找到tp.leader此时对应的node
             Metadata.LeaderAndEpoch leaderAndEpoch = metadata.currentLeader(tp);
 
+            // 此时没有leader信息 需要更新元数据 可能还处于重新选举阶段
             if (!leaderAndEpoch.leader.isPresent()) {
                 log.debug("Leader for partition {} is unknown for fetching offset {}", tp, offset);
                 metadata.requestUpdate();
+                // 那么该tp就需要重试
                 partitionsToRetry.add(tp);
             } else {
                 Node leader = leaderAndEpoch.leader.get();
+                // 先忽略连接不可用的情况
                 if (client.isUnavailable(leader)) {
                     client.maybeThrowAuthFailure(leader);
 
@@ -1007,6 +1055,7 @@ public class Fetcher<K, V> implements Closeable {
                 }
             }
         }
+        // 按照node分组
         return regroupPartitionMapByNode(partitionDataMap);
     }
 
@@ -1022,6 +1071,7 @@ public class Fetcher<K, V> implements Closeable {
                                                                   final Map<TopicPartition, ListOffsetsPartition> timestampsToSearch,
                                                                   boolean requireTimestamp) {
         ListOffsetsRequest.Builder builder = ListOffsetsRequest.Builder
+                // 隔离级别是在这个时候起作用
                 .forConsumer(requireTimestamp, isolationLevel)
                 .setTargetTimes(ListOffsetsRequest.toListOffsetsTopics(timestampsToSearch));
 
@@ -1046,6 +1096,7 @@ public class Fetcher<K, V> implements Closeable {
      *               particular error are simply left out of the future map. Note that the corresponding timestamp
      *               value of each partition may be null only for v0. In v1 and later the ListOffset API would not
      *               return a null timestamp (-1 is returned instead when necessary).
+     *               通过该函数来处理从leader申请获取偏移量的结果
      */
     private void handleListOffsetResponse(ListOffsetsResponse listOffsetsResponse,
                                           RequestFuture<ListOffsetResult> future) {
@@ -1053,12 +1104,15 @@ public class Fetcher<K, V> implements Closeable {
         Set<TopicPartition> partitionsToRetry = new HashSet<>();
         Set<String> unauthorizedTopics = new HashSet<>();
 
+        // 处理发往某个node的所有tp偏移量
         for (ListOffsetsTopicResponse topic : listOffsetsResponse.topics()) {
+            // 处理每个分区的偏移量
             for (ListOffsetsPartitionResponse partition : topic.partitions()) {
                 TopicPartition topicPartition = new TopicPartition(topic.name(), partition.partitionIndex());
                 Errors error = Errors.forCode(partition.errorCode());
                 switch (error) {
                     case NONE:
+                        // 虽然是list类型 实际上只期望产生一个值 这个应该是兼容性代码
                         if (!partition.oldStyleOffsets().isEmpty()) {
                             // Handle v0 response with offsets
                             long offset;
@@ -1071,6 +1125,7 @@ public class Fetcher<K, V> implements Closeable {
                             }
                             log.debug("Handling v0 ListOffsetResponse response for {}. Fetched offset {}",
                                 topicPartition, offset);
+                            // 代表偏移量有效 生成结果并设置到list中
                             if (offset != ListOffsetsResponse.UNKNOWN_OFFSET) {
                                 ListOffsetData offsetData = new ListOffsetData(offset, null, Optional.empty());
                                 fetchedOffsets.put(topicPartition, offsetData);
@@ -1089,6 +1144,8 @@ public class Fetcher<K, V> implements Closeable {
                             }
                         }
                         break;
+
+                        // 产生了以下异常时 都加入到retry队列中
                     case UNSUPPORTED_FOR_MESSAGE_FORMAT:
                         // The message format on the broker side is before 0.10.0, which means it does not
                         // support timestamps. We treat this case the same as if we weren't able to find an
@@ -1125,9 +1182,13 @@ public class Fetcher<K, V> implements Closeable {
         if (!unauthorizedTopics.isEmpty())
             future.raise(new TopicAuthorizationException(unauthorizedTopics));
         else
+            // 产生的结果中分别包含需要重试的以及本次获取到偏移量结果的
             future.complete(new ListOffsetResult(fetchedOffsets, partitionsToRetry));
     }
 
+    /**
+     * 这个结果是描述某个leader节点下本次需要探测的tp的偏移量信息
+     */
     static class ListOffsetResult {
         private final Map<TopicPartition, ListOffsetData> fetchedOffsets;
         private final Set<TopicPartition> partitionsToRetry;

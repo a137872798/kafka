@@ -198,6 +198,7 @@ public class Metadata implements Closeable {
      * @param topicPartition
      * @param leaderEpoch
      * @return true if we updated the last seen epoch, false otherwise
+     * 如果发现leader发生了变化 设置需要更新metadata的标记
      */
     public synchronized boolean updateLastSeenEpochIfNewer(TopicPartition topicPartition, int leaderEpoch) {
         Objects.requireNonNull(topicPartition, "TopicPartition cannot be null");

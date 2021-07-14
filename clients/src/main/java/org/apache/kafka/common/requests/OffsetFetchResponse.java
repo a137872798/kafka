@@ -66,6 +66,9 @@ public class OffsetFetchResponse extends AbstractResponse {
     private final OffsetFetchResponseData data;
     private final Errors error;
 
+    /**
+     * 描述某个分区之前消费到的偏移量信息
+     */
     public static final class PartitionData {
         public final long offset;
         public final String metadata;

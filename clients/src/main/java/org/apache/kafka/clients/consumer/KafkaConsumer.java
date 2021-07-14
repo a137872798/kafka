@@ -596,6 +596,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private final AtomicInteger refcount = new AtomicInteger(0);
 
     // to keep from repeatedly scanning subscriptions in poll(), cache the result during metadata updates
+    // 此时本consumer是否已经准备好了所有tp的偏移量 需要有偏移量才能知道从哪里开始拉取数据
     private boolean cachedSubscriptionHashAllFetchPositions;
 
     /**
@@ -803,6 +804,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
             // no coordinator will be constructed for the default (null) group id
             // 如果设置了groupId 就会需要一个协调者对象  默认情况下都会要求设置groupId
+            // 如果不设置groupId 就对应广播消费 每个消费者都会消费到所有数据
             this.coordinator = !groupId.isPresent() ? null :
                 new ConsumerCoordinator(groupRebalanceConfig,
                         logContext,
@@ -1277,17 +1279,19 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 // 每轮拉取都会检测是否设置了唤醒标记 发现被唤醒时会抛出异常并停止拉取消息
                 client.maybeTriggerWakeup();
 
-                // 这里代表仅发出join请求 不会阻塞等待
+                // 这里代表仅发出join请求 不会阻塞等待  在发出join请求前会按照需要清理掉本地缓存的tp(以及提交偏移量) 所以与下面的pollForFetches不会起冲突
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
-                    // 如果当前时间不包含拉取元数据的 那么会先自旋确保拿到最新的元数据  并且会等待拿到分配信息 以及获取拉取的目标偏移量
+                    // 如果当前时间不包含拉取元数据的 那么会先自旋确保拿到最新的元数据  并且会等待拿到分配信息
+                    // 如果已经有这些信息了就会对之前拉取的偏移量进行合法性校验 (只有当元数据发生变化 比如某个topicleader的变化才会校验偏移量) 获取当前消费的起始偏移量
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
                         log.warn("Still waiting for metadata");
                     }
                 }
 
+                // 这里针对分配到的tp(且fetchState为fetching)开始拉取数据
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
                     // before returning the fetched records, we can send off the next round of fetches
@@ -1323,24 +1327,32 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             return false;
         }
 
-        // 接下来要获取读取的起始偏移量
+        // 下面这个方法完成了
+        // 1.检验偏移量有效性
+        // 2.发现init的tp从coordinator中获取之前提交的偏移量
+        // 3.针对无法从coordinator获取到起始偏移量的tp使用reset策略+从tp.leader获取相关偏移量来解决
         return updateFetchPositions(timer);
     }
 
     /**
+     * 针对此时订阅的tp 开始拉取数据
      * @throws KafkaException if the rebalance callback throws exception
      */
     private Map<TopicPartition, List<ConsumerRecord<K, V>>> pollForFetches(Timer timer) {
+        // 根据此时的剩余时间 以及下次心跳/autoCommit的触发时间 设置poll的调用时长 kafka在io线程的执行逻辑中为每个操作严格分配了时间
         long pollTimeout = coordinator == null ? timer.remainingMs() :
+                // timeToNextPoll 代表的是coordinator.poll的调用时间 在该方法中会对coordinator进行心跳检测 以及自动提交偏移量
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
         // if data is available already, return it immediately
+        // 如果此时已经准备好消息了 立即返回 TODO 先忽略
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
+        // 这里是发送fetch请求的地方
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -2463,7 +2475,9 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // 对现有的偏移量进行校验
         fetcher.validateOffsetsIfNeeded();
 
+        // 在拉取数据前 需要准备好所有tp的起始偏移量
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
+        // 如果准备完成 直接返回
         if (cachedSubscriptionHashAllFetchPositions) return true;
 
         // If there are any partitions which do not have a valid position and are not
@@ -2471,15 +2485,19 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // coordinator lookup if there are partitions which have missing positions, so
         // a consumer with manually assigned partitions can avoid a coordinator dependence
         // by always ensuring that assigned partitions have an initial position.
+        // 如果在时间范围内没有成功拉取到偏移量 返回false
         if (coordinator != null && !coordinator.refreshCommittedOffsetsIfNeeded(timer)) return false;
 
         // If there are partitions still needing a position and a reset policy is defined,
         // request reset using the default policy. If no reset strategy is defined and there
         // are partitions with a missing position, then we will raise an exception.
+        // 某些tp之前可能都还没有被消费过 所以coordinator上还没有缓存任何偏移量信息 这时就要利用reset策略来指定偏移量
         subscriptions.resetInitializingPositions();
 
         // Finally send an asynchronous request to lookup and update the positions of any
         // partitions which are awaiting reset.
+        // 此时需要重置的fetchState 已经被标记成 await_reset 这里通过重置策略设置起始偏移量
+        // 这个操作本身是异步的 也就是不会影响之后的拉取请求 拉取请求应该是仅针对fetchState为fetching的
         fetcher.resetOffsetsIfNeeded();
 
         return true;

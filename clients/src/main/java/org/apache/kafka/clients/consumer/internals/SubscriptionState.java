@@ -524,36 +524,51 @@ public class SubscriptionState {
     }
 
     /**
+     * 这里是在校验偏移量
      * Attempt to complete validation with the end offset returned from the OffsetForLeaderEpoch request.
+     * @param tp 本次要校验的topic和partition
+     * @param requestPosition 本次待校验的偏移量
+     * @param epochEndOffset 此时最新的偏移量
      * @return Log truncation details if detected and no reset policy is defined.
      */
     public synchronized Optional<LogTruncation> maybeCompleteValidation(TopicPartition tp,
                                                                         FetchPosition requestPosition,
                                                                         EpochEndOffset epochEndOffset) {
+        // 获取分配到本consumer的tp的状态信息
         TopicPartitionState state = assignedStateOrNull(tp);
         if (state == null) {
             log.debug("Skipping completed validation for partition {} which is not currently assigned.", tp);
+            // 如果当前状态不需要被校验 忽略结果
         } else if (!state.awaitingValidation()) {
             log.debug("Skipping completed validation for partition {} which is no longer expecting validation.", tp);
         } else {
+            // 获取描述偏移量信息的state
             SubscriptionState.FetchPosition currentPosition = state.position;
+            // 代表在等待校验期间发生了变化 本次校验失去意义
             if (!currentPosition.equals(requestPosition)) {
                 log.debug("Skipping completed validation for partition {} since the current position {} " +
                           "no longer matches the position {} when the request was sent",
                           tp, currentPosition, requestPosition);
+                // 此时偏移量未知 TODO 怎么样出现这种情况
             } else if (epochEndOffset.endOffset() == UNDEFINED_EPOCH_OFFSET ||
                         epochEndOffset.leaderEpoch() == UNDEFINED_EPOCH) {
+                // 如果存在默认的偏移量策略 按照策略处理
                 if (hasDefaultOffsetResetPolicy()) {
                     log.info("Truncation detected for partition {} at offset {}, resetting offset",
                              tp, currentPosition);
+                    // 这里会将偏移量状态设置成待重试
                     requestOffsetReset(tp);
                 } else {
                     log.warn("Truncation detected for partition {} at offset {}, but no reset policy is set",
                              tp, currentPosition);
+                    // 在未设置重置策略时
                     return Optional.of(new LogTruncation(tp, requestPosition, Optional.empty()));
                 }
+                // 本次校验的偏移量超过了目标tp的最大偏移量
             } else if (epochEndOffset.endOffset() < currentPosition.offset) {
+                // 在指定了重置策略的情况下
                 if (hasDefaultOffsetResetPolicy()) {
+                    // 这里使用最新的偏移量作为起始偏移量  (可能是因为原本就超过了最大偏移量  所以推测使用者的意图就是想使用最新的偏移量)
                     SubscriptionState.FetchPosition newPosition = new SubscriptionState.FetchPosition(
                             epochEndOffset.endOffset(), Optional.of(epochEndOffset.leaderEpoch()),
                             currentPosition.currentLeader);
@@ -561,6 +576,7 @@ public class SubscriptionState {
                              "the first offset known to diverge {}", tp, currentPosition, newPosition);
                     state.seekValidated(newPosition);
                 } else {
+                    // 在出现异常情况且没有指定默认的重置策略时 将本次校验的偏移量和结果偏移量存入到一个截取对象中
                     OffsetAndMetadata divergentOffset = new OffsetAndMetadata(epochEndOffset.endOffset(),
                         Optional.of(epochEndOffset.leaderEpoch()), null);
                     log.warn("Truncation detected for partition {} at offset {} (the end offset from the " +
@@ -568,6 +584,7 @@ public class SubscriptionState {
                     return Optional.of(new LogTruncation(tp, requestPosition, Optional.of(divergentOffset)));
                 }
             } else {
+                // 代表正常通过校验
                 state.completeValidation();
             }
         }
@@ -669,6 +686,11 @@ public class SubscriptionState {
         return allConsumed;
     }
 
+    /**
+     * 将偏移量状态修改成待重置
+     * @param partition
+     * @param offsetResetStrategy
+     */
     public synchronized void requestOffsetReset(TopicPartition partition, OffsetResetStrategy offsetResetStrategy) {
         assignedState(partition).reset(offsetResetStrategy);
     }
@@ -680,6 +702,10 @@ public class SubscriptionState {
         });
     }
 
+    /**
+     * 按照策略重置偏移量
+     * @param partition
+     */
     public void requestOffsetReset(TopicPartition partition) {
         requestOffsetReset(partition, defaultResetStrategy);
     }
@@ -702,6 +728,10 @@ public class SubscriptionState {
         return assignedState(partition).resetStrategy();
     }
 
+    /**
+     * 是否所有偏移量都已经获取到了
+     * @return
+     */
     public synchronized boolean hasAllFetchPositions() {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream API
         Iterator<TopicPartitionState> it = assignment.stateIterator();
@@ -713,6 +743,10 @@ public class SubscriptionState {
         return true;
     }
 
+    /**
+     * 返回所有状态是init的tp 这些tp是需要获取拉取的起始偏移量的
+     * @return
+     */
     public synchronized Set<TopicPartition> initializingPartitions() {
         return collectPartitions(state -> state.fetchState.equals(FetchStates.INITIALIZING));
     }
@@ -727,14 +761,18 @@ public class SubscriptionState {
         return result;
     }
 
-
+    /**
+     * 针对之前还未消费过的tp 生成一个起始偏移量
+     */
     public synchronized void resetInitializingPositions() {
         final Set<TopicPartition> partitionsWithNoOffsets = new HashSet<>();
         assignment.forEach((tp, partitionState) -> {
             if (partitionState.fetchState.equals(FetchStates.INITIALIZING)) {
                 if (defaultResetStrategy == OffsetResetStrategy.NONE)
+                    // 忽略异常情况
                     partitionsWithNoOffsets.add(tp);
                 else
+                    // 标记成需要重置偏移量
                     requestOffsetReset(tp);
             }
         });
@@ -778,6 +816,11 @@ public class SubscriptionState {
         assignedState(tp).resume();
     }
 
+    /**
+     * 为这组失败的tp设置重试时间 在短时间内针对这些tp发起的其他操作 比如校验偏移量 会被忽略
+     * @param partitions
+     * @param nextRetryTimeMs
+     */
     synchronized void requestFailed(Set<TopicPartition> partitions, long nextRetryTimeMs) {
         for (TopicPartition partition : partitions) {
             // by the time the request failed, the assignment may no longer
@@ -805,12 +848,18 @@ public class SubscriptionState {
          * 当初始化分配的分区时 拉取状态为init 此时还不知道该tp对应的偏移量
          */
         private FetchState fetchState;
+        /**
+         * 当本consumer刚分配到tp时 还没有偏移量信息
+         */
         private FetchPosition position; // last consumed position
 
         private Long highWatermark; // the high watermark from last fetch
         private Long logStartOffset; // the log start offset
         private Long lastStableOffset;
         private boolean paused;  // whether this partition has been paused by the user
+        /**
+         * 设置有关本tp偏移量的重置策略  一般由subscriptionState传进来
+         */
         private OffsetResetStrategy resetStrategy;  // the strategy to use if the offset needs resetting
         private Long nextRetryTimeMs;
         private Integer preferredReadReplica;
@@ -868,6 +917,10 @@ public class SubscriptionState {
             }
         }
 
+        /**
+         * 将偏移量状态修改成待重置
+         * @param strategy
+         */
         private void reset(OffsetResetStrategy strategy) {
             transitionState(FetchStates.AWAIT_RESET, () -> {
                 this.resetStrategy = strategy;
@@ -884,6 +937,7 @@ public class SubscriptionState {
          * 将某些fetchState修改成待校验
          */
         private boolean maybeValidatePosition(Metadata.LeaderAndEpoch currentLeaderAndEpoch) {
+            // 已经处于待重置偏移量状态了 (使用偏移量策略来重置)
             if (this.fetchState.equals(FetchStates.AWAIT_RESET)) {
                 return false;
             }
@@ -893,7 +947,7 @@ public class SubscriptionState {
                 return false;
             }
 
-            // TODO 先忽略
+            // 之前有偏移量 并且leader节点发生了变化
             if (position != null && !position.currentLeader.equals(currentLeaderAndEpoch)) {
                 // 生成新的position对象 并进行检测
                 FetchPosition newPosition = new FetchPosition(position.offset, position.offsetEpoch, currentLeaderAndEpoch);
@@ -920,6 +974,7 @@ public class SubscriptionState {
          * @param position
          */
         private void validatePosition(FetchPosition position) {
+            // 如果leader的任期已经发生变化了 此时的偏移量不一定有效 需要等待校验
             if (position.offsetEpoch.isPresent() && position.currentLeader.epoch.isPresent()) {
                 transitionState(FetchStates.AWAIT_VALIDATION, () -> {
                     this.position = position;
@@ -936,6 +991,7 @@ public class SubscriptionState {
 
         /**
          * Clear the awaiting validation state and enter fetching.
+         * 正常通过校验
          */
         private void completeValidation() {
             if (hasPosition()) {
@@ -1108,6 +1164,9 @@ public class SubscriptionState {
             }
         },
 
+        /**
+         * 代表需要重置偏移量
+         */
         AWAIT_RESET() {
             @Override
             public Collection<FetchState> validTransitions() {
@@ -1154,9 +1213,6 @@ public class SubscriptionState {
      */
     public static class FetchPosition {
         public final long offset;
-        /**
-         * 对应coordinator的任期
-         */
         final Optional<Integer> offsetEpoch;
         final Metadata.LeaderAndEpoch currentLeader;
 

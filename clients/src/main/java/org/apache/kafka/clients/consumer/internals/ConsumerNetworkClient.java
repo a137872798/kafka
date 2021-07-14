@@ -236,7 +236,7 @@ public class ConsumerNetworkClient implements Closeable {
      * @return true if the future is done, false otherwise
      * @throws WakeupException if {@link #wakeup()} is called from another thread
      * @throws InterruptException if the calling thread is interrupted
-     * future 对象是用于获取协调者节点地址的
+     * 只要当future得到了结果就从循环中退出  最大的等待时间是timer
      */
     public boolean poll(RequestFuture<?> future, Timer timer) {
         do {
