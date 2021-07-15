@@ -471,7 +471,11 @@ public class SubscriptionState {
         return this.assignment.size();
     }
 
-    // Visible for testing
+    /**
+     * 将所有fetchState为 fetching 并且满足保留条件的返回
+     * @param isAvailable
+     * @return
+     */
     public synchronized List<TopicPartition> fetchablePartitions(Predicate<TopicPartition> isAvailable) {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream API
         List<TopicPartition> result = new ArrayList<>();
@@ -640,6 +644,8 @@ public class SubscriptionState {
      * @param tp The topic partition
      * @param preferredReadReplicaId The preferred read replica
      * @param timeMs The time at which this preferred replica is no longer valid
+     *               为某个分区设置更合适的副本节点
+     *
      */
     public synchronized void updatePreferredReadReplica(TopicPartition tp, int preferredReadReplicaId, LongSupplier timeMs) {
         assignedState(tp).updatePreferredReadReplica(preferredReadReplicaId, timeMs);
@@ -651,9 +657,11 @@ public class SubscriptionState {
      * @param tp The topic partition
      * @param timeMs The current time
      * @return Returns the current preferred read replica, if it has been set and if it has not expired.
+     * 判断是否更倾向于从副本中读取数据
      */
     public synchronized Optional<Integer> preferredReadReplica(TopicPartition tp, long timeMs) {
         final TopicPartitionState topicPartitionState = assignedStateOrNull(tp);
+        // 这种情况正常不会发生
         if (topicPartitionState == null) {
             return Optional.empty();
         } else {
@@ -678,7 +686,7 @@ public class SubscriptionState {
     public synchronized Map<TopicPartition, OffsetAndMetadata> allConsumed() {
         Map<TopicPartition, OffsetAndMetadata> allConsumed = new HashMap<>();
         assignment.forEach((topicPartition, partitionState) -> {
-            // 如果此时有关该tp的偏移量是有效的 需要同步给coordinator 而在join阶段tp信息都还没获取到 就不需要同步了
+            // 只能提交处于fetching的消息
             if (partitionState.hasValidPosition())
                 allConsumed.put(topicPartition, new OffsetAndMetadata(partitionState.position.offset,
                         partitionState.position.offsetEpoch, ""));
@@ -853,9 +861,15 @@ public class SubscriptionState {
          */
         private FetchPosition position; // last consumed position
 
+        /**
+         * 在拉取到结果时 可能会携带一个高水位信息 就同步到本地
+         */
         private Long highWatermark; // the high watermark from last fetch
         private Long logStartOffset; // the log start offset
         private Long lastStableOffset;
+        /**
+         * 用户指定暂停对该tp消息的处理
+         */
         private boolean paused;  // whether this partition has been paused by the user
         /**
          * 设置有关本tp偏移量的重置策略  一般由subscriptionState传进来
@@ -890,7 +904,13 @@ public class SubscriptionState {
             }
         }
 
+        /**
+         * 在拉取数据时 可能会选择某个副本
+         * @param timeMs
+         * @return
+         */
         private Optional<Integer> preferredReadReplica(long timeMs) {
+            // 如果当前时间已经超过了推荐副本的有效时间 还是只从leader拉取数据
             if (preferredReadReplicaExpireTimeMs != null && timeMs > preferredReadReplicaExpireTimeMs) {
                 preferredReadReplica = null;
                 return Optional.empty();
@@ -899,6 +919,11 @@ public class SubscriptionState {
             }
         }
 
+        /**
+         * 设置推荐的副本
+         * @param preferredReadReplica
+         * @param timeMs
+         */
         private void updatePreferredReadReplica(int preferredReadReplica, LongSupplier timeMs) {
             if (this.preferredReadReplica == null || preferredReadReplica != this.preferredReadReplica) {
                 this.preferredReadReplica = preferredReadReplica;

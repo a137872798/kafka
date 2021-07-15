@@ -51,6 +51,7 @@ import static org.apache.kafka.common.requests.FetchMetadata.INVALID_SESSION_ID;
  * determines which partitions need to be included in each fetch request, and what
  * the attached fetch session metadata should be for each request.  The corresponding
  * class on the receiving broker side is FetchManager.
+ * 该对象负责处理拉取过程中某个node收到的数据
  */
 public class FetchSessionHandler {
     private final Logger log;
@@ -171,6 +172,9 @@ public class FetchSessionHandler {
         }
     }
 
+    /**
+     * 用于存储拉取数据的请求参数
+     */
     public class Builder {
         /**
          * The next partitions which we want to fetch.
@@ -184,6 +188,7 @@ public class FetchSessionHandler {
          *
          * Another reason is because we make use of the list ordering to optimize the preparation of
          * incremental fetch requests (see below).
+         * tp以及对应的起始偏移量
          */
         private LinkedHashMap<TopicPartition, PartitionData> next;
         private final boolean copySessionPartitions;
@@ -200,27 +205,38 @@ public class FetchSessionHandler {
 
         /**
          * Mark that we want data from this partition in the upcoming fetch.
+         * 设置针对某个tp数据的拉取请求
          */
         public void add(TopicPartition topicPartition, PartitionData data) {
             next.put(topicPartition, data);
         }
 
+        /**
+         * 将next中的数据转换成 fetchRequestData
+         * @return
+         */
         public FetchRequestData build() {
+            // 应该是代表本次是否要将所有tp发送出去 跟会话的概念有关
             if (nextMetadata.isFull()) {
                 if (log.isDebugEnabled()) {
                     log.debug("Built full fetch {} for node {} with {}.",
                               nextMetadata, node, partitionsToLogString(next.keySet()));
                 }
+                // 将sessionPartitions 指向现在的参数体
                 sessionPartitions = next;
                 next = null;
                 Map<TopicPartition, PartitionData> toSend =
                     Collections.unmodifiableMap(new LinkedHashMap<>(sessionPartitions));
+                // 包装成请求对象
                 return new FetchRequestData(toSend, Collections.emptyList(), toSend, nextMetadata);
             }
 
+            // 首先resp中包含了会话id才会进入这个分支 TODO 先忽略会话
             List<TopicPartition> added = new ArrayList<>();
             List<TopicPartition> removed = new ArrayList<>();
             List<TopicPartition> altered = new ArrayList<>();
+
+            // 遍历本consumer分配的所有tp
             for (Iterator<Entry<TopicPartition, PartitionData>> iter =
                      sessionPartitions.entrySet().iterator(); iter.hasNext(); ) {
                 Entry<TopicPartition, PartitionData> entry = iter.next();
@@ -317,11 +333,15 @@ public class FetchSessionHandler {
      *
      * @param response  The response.
      * @return          True if the full fetch response partitions are valid.
+     * 本次是否获取到了对应的tp信息 即使没有新消息应该也会在response中包含key
      */
     String verifyFullFetchResponsePartitions(FetchResponse<?> response) {
         StringBuilder bld = new StringBuilder();
+
+        // sessionPartitions 是本次发送拉取请求时对应的所有tp 这里代表额外返回了更多的tp
         Set<TopicPartition> extra =
             findMissing(response.responseData().keySet(), sessionPartitions.keySet());
+        // 本次没有收到的数据
         Set<TopicPartition> omitted =
             findMissing(sessionPartitions.keySet(), response.responseData().keySet());
         if (!omitted.isEmpty()) {
@@ -397,19 +417,25 @@ public class FetchSessionHandler {
      * @param response  The response.
      * @return          True if the response is well-formed; false if it can't be processed
      *                  because of missing or unexpected partitions.
+     *                  当收到fetch的结果时 使用该对象来处理  response中包含了本次请求的各个tp的结果
      */
     public boolean handleResponse(FetchResponse<?> response) {
         if (response.error() != Errors.NONE) {
             log.info("Node {} was unable to process the fetch request with {}: {}.",
                 node, nextMetadata, response.error());
+            // TODO 会话未找到是什么情况下出现
             if (response.error() == Errors.FETCH_SESSION_ID_NOT_FOUND) {
+                // 重置会话状态
                 nextMetadata = FetchMetadata.INITIAL;
             } else {
+                // 将epoch修改成INITIAL_EPOCH
                 nextMetadata = nextMetadata.nextCloseExisting();
             }
             return false;
         }
+        // 代表本次发出了本consumer分配到的所有tp
         if (nextMetadata.isFull()) {
+            // 结果为空 重置元数据状态
             if (response.responseData().isEmpty() && response.throttleTimeMs() > 0) {
                 // Normally, an empty full fetch response would be invalid.  However, KIP-219
                 // specifies that if the broker wants to throttle the client, it will respond
@@ -424,11 +450,16 @@ public class FetchSessionHandler {
                 nextMetadata = FetchMetadata.INITIAL;
                 return false;
             }
+            // 判断本次是否拉取到了期望的所有tp数据
             String problem = verifyFullFetchResponsePartitions(response);
+
+            // 只要有部分数据没获取到 或者拉取到了不该消费的数据 都会返回false 并且重置metadata
             if (problem != null) {
                 log.info("Node {} sent an invalid full fetch response with {}", node, problem);
                 nextMetadata = FetchMetadata.INITIAL;
                 return false;
+
+                // 至少tp是正常的 返回INVALID_SESSION_ID 代表不支持会话 重置nextMetadata
             } else if (response.sessionId() == INVALID_SESSION_ID) {
                 if (log.isDebugEnabled())
                     log.debug("Node {} sent a full fetch response{}", node, responseDataToLogString(response));
@@ -436,6 +467,7 @@ public class FetchSessionHandler {
                 return true;
             } else {
                 // The server created a new incremental fetch session.
+                // 代表延续会话 该标识+1
                 if (log.isDebugEnabled())
                     log.debug("Node {} sent a full fetch response that created a new incremental " +
                             "fetch session {}{}", node, response.sessionId(), responseDataToLogString(response));
@@ -443,11 +475,13 @@ public class FetchSessionHandler {
                 return true;
             }
         } else {
+            // 非full情况 允许只收到部分tp的消息 但是拒绝收到额外的消息
             String problem = verifyIncrementalFetchResponsePartitions(response);
             if (problem != null) {
                 log.info("Node {} sent an invalid incremental fetch response with {}", node, problem);
                 nextMetadata = nextMetadata.nextCloseExisting();
                 return false;
+                // 代表不支持会话 但是消息体本身有效
             } else if (response.sessionId() == INVALID_SESSION_ID) {
                 // The incremental fetch session was closed by the server.
                 if (log.isDebugEnabled())
@@ -459,6 +493,7 @@ public class FetchSessionHandler {
                 // The incremental fetch session was continued by the server.
                 // We don't have to do anything special here to support KIP-219, since an empty incremental
                 // fetch request is perfectly valid.
+                // 支持会话 继续将epoch+1
                 if (log.isDebugEnabled())
                     log.debug("Node {} sent an incremental fetch response with throttleTimeMs = {} " +
                         "for session {}{}", node, response.throttleTimeMs(), response.sessionId(),

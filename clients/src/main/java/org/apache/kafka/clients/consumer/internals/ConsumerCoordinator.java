@@ -1251,6 +1251,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
             // 设置提交偏移量的请求到kafkaChannel上
             RequestFuture<Void> future = sendOffsetCommitRequest(offsets);
+            // 在这里阻塞 当future产生结果 或者将时间用完返回
             client.poll(future, timer);
 
             // We may have had in-flight offset commits when the synchronous commit began. If so, ensure that

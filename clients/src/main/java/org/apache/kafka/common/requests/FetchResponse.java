@@ -113,7 +113,7 @@ public class FetchResponse<T extends BaseRecords> extends AbstractResponse {
     public static final class PartitionData<T extends BaseRecords> {
         private final FetchResponseData.FetchablePartitionResponse partitionResponse;
 
-        // Derived fields
+        // Derived fields  返回结果中有推荐的副本id
         private final Optional<Integer> preferredReplica;
         private final List<AbortedTransaction> abortedTransactions;
         private final Errors error;

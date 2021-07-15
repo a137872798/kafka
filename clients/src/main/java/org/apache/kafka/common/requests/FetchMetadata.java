@@ -22,6 +22,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
 
+/**
+ * 存储fetch的元数据信息
+ */
 public class FetchMetadata {
     public static final Logger log = LoggerFactory.getLogger(FetchMetadata.class);
 
@@ -44,6 +47,7 @@ public class FetchMetadata {
 
     /**
      * The FetchMetadata that is used when initializing a new FetchSessionHandler.
+     * 代表初始状态 session 和 epoch都是0
      */
     public static final FetchMetadata INITIAL = new FetchMetadata(INVALID_SESSION_ID, INITIAL_EPOCH);
 
@@ -87,6 +91,7 @@ public class FetchMetadata {
 
     /**
      * Returns true if this is a full fetch request.
+     * 是否要将所有tp信息包含到req中
      */
     public boolean isFull() {
         return (this.epoch == INITIAL_EPOCH) || (this.epoch == FINAL_EPOCH);
@@ -115,6 +120,7 @@ public class FetchMetadata {
 
     /**
      * Return the metadata for the next error response.
+     * 当处理过程中发现了异常会触发该方法
      */
     public FetchMetadata nextCloseExisting() {
         return new FetchMetadata(sessionId, INITIAL_EPOCH);
@@ -122,6 +128,7 @@ public class FetchMetadata {
 
     /**
      * Return the metadata for the next full fetch request.
+     * 延续会话 epoch+1
      */
     public static FetchMetadata newIncremental(int sessionId) {
         return new FetchMetadata(sessionId, nextEpoch(INITIAL_EPOCH));
